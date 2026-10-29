@@ -1,0 +1,1 @@
+本系列课程旨在从零还原Claude Code的核心源码，采用Python和Node.js双语言实现——既贴合Claude Code原生技术栈，也兼顾Python在Agent开发岗位的主流需求。Claude Code是学习Harness工程（Agent工程框架）的最佳范本：工具调用、上下文管理、推理循环等设计精巧而规范。但真正的掌握来自亲手实现——因此课程采用循序渐进的方式，从最简核心起步，实战驱动
