@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件工具集之 Write（文件写入）实现</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#1B1410;
+  --card:#261B14;
+  --card-line:#3D2B1F;
+  --orange:#D97757;
+  --cream:#F5EDE4;
+  --muted:#A89888;
+  --bar-dark:#2A1D15;
+  --bar-line:#4A3527;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-family:'Noto Sans SC',sans-serif}
+#viewport{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+#stage{width:1920px;height:1080px;position:relative;flex:none;background:var(--bg);cursor:pointer;
+  background-image:
+    radial-gradient(900px 500px at 85% 8%, rgba(217,119,87,.10), transparent 60%),
+    radial-gradient(700px 420px at 8% 92%, rgba(217,119,87,.06), transparent 60%),
+    repeating-linear-gradient(0deg, rgba(245,237,228,.025) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(90deg, rgba(245,237,228,.025) 0 1px, transparent 1px 64px);
+}
+.slide{position:absolute;inset:0;display:none;flex-direction:column;padding:100px;gap:36px}
+.slide.active{display:flex}
+
+/* ---------- 通用 ---------- */
+.mono{font-family:'JetBrains Mono',monospace}
+.anim{opacity:0}
+.slide.play .anim{animation:fadeUp .7s cubic-bezier(.22,.9,.3,1) forwards}
+.slide.play .anim.fin{animation-name:fadeIn}
+.slide.play .anim.pop{animation-name:popIn}
+.slide.play .d0{animation-delay:.10s}
+.slide.play .d1{animation-delay:.35s}
+.slide.play .d2{animation-delay:.60s}
+.slide.play .d3{animation-delay:.85s}
+.slide.play .d4{animation-delay:1.10s}
+.slide.play .d5{animation-delay:1.35s}
+.slide.play .d6{animation-delay:1.60s}
+.slide.play .d7{animation-delay:1.85s}
+@keyframes fadeUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{from{opacity:0;transform:scale(.88)}to{opacity:1;transform:scale(1)}}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+#pageInd{position:absolute;top:36px;right:48px;font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--muted);letter-spacing:2px;z-index:10}
+#pageInd b{color:var(--orange);font-weight:700}
+
+.tag{font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--muted);letter-spacing:3px;display:flex;align-items:center;gap:14px}
+.tag .dot{width:10px;height:10px;border-radius:50%;background:var(--orange);box-shadow:0 0 12px rgba(217,119,87,.8)}
+
+/* ---------- 第一页：海报风 ---------- */
+#slide1{padding:90px 100px;gap:30px}
+.s1-top{display:flex;align-items:center;justify-content:space-between}
+.s1-series{font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--muted);letter-spacing:2px}
+.s1-series b{color:var(--cream);font-weight:700}
+.kicker{align-self:flex-start;font-family:'JetBrains Mono',monospace;font-size:26px;color:var(--orange);
+  border:1px solid rgba(217,119,87,.55);border-radius:999px;padding:10px 26px;
+  background:rgba(217,119,87,.08);letter-spacing:1px}
+.s1-hero{display:flex;flex-direction:column;gap:6px}
+.s1-pre{font-size:56px;font-weight:700;color:var(--cream);letter-spacing:6px}
+.s1-title{display:flex;align-items:baseline;gap:28px;flex-wrap:wrap}
+.s1-title .w{font-family:'JetBrains Mono',monospace;font-size:170px;font-weight:800;color:var(--orange);line-height:1;
+  text-shadow:0 0 70px rgba(217,119,87,.45)}
+.s1-title .r{font-size:88px;font-weight:900;color:var(--cream);letter-spacing:4px}
+.s1-sub{font-size:36px;color:var(--muted);font-weight:500;letter-spacing:2px}
+.s1-sub b{color:var(--cream);font-weight:700}
+.s1-card{background:var(--card);border:1px solid var(--card-line);border-radius:16px;padding:28px 36px;
+  display:flex;flex-direction:column;gap:12px}
+.s1-card .who{font-family:'JetBrains Mono',monospace;font-size:24px;color:var(--orange);letter-spacing:1px}
+.s1-card p{font-size:28px;line-height:1.65;color:var(--cream)}
+.s1-card p .m{color:var(--muted)}
+.s1-card p .o{color:var(--orange);font-weight:700}
+.s1-card p .code{font-family:'JetBrains Mono',monospace;font-size:25px;color:var(--orange);
+  background:rgba(217,119,87,.12);padding:2px 10px;border-radius:6px}
+.s1-bottom{margin-top:auto;background:var(--bar-dark);border:1px solid var(--bar-line);border-radius:14px;
+  padding:18px 32px;display:flex;align-items:center;justify-content:space-between}
+.s1-bottom .chain{display:flex;align-items:center;gap:18px;font-size:26px;color:var(--cream);font-weight:500}
+.s1-bottom .chain .step{font-family:'JetBrains Mono',monospace;color:var(--orange);font-size:24px}
+.s1-bottom .chain .arr{color:var(--muted)}
+.s1-bottom .next{font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--muted);letter-spacing:1px}
+.s1-bottom .next b{color:var(--orange);animation:blink 1.2s infinite}
+
+/* ---------- 第二页：核心机制 ---------- */
+#slide2{padding:72px 100px;gap:24px}
+.s2-head{display:flex;flex-direction:column;gap:10px}
+.s2-head h1{font-size:60px;font-weight:900;color:var(--cream);letter-spacing:2px;line-height:1.15}
+.s2-head h1 .o{color:var(--orange)}
+.s2-head .sub{font-size:28px;color:var(--muted)}
+.s2-head .sub b{color:var(--cream);font-weight:700}
+.s2-head .sub .code{font-family:'JetBrains Mono',monospace;font-size:25px;color:var(--orange)}
+.s2-main{display:flex;gap:48px;flex:1;min-height:0}
+.term{flex:1.25;min-width:0;background:#171009;border:1px solid var(--card-line);border-radius:14px;
+  display:flex;flex-direction:column;overflow:hidden}
+.term-bar{display:flex;align-items:center;gap:10px;padding:14px 20px;background:var(--bar-dark);border-bottom:1px solid var(--bar-line)}
+.term-bar .c{width:16px;height:16px;border-radius:50%}
+.term-bar .c1{background:#E0604F}.term-bar .c2{background:#E0B34F}.term-bar .c3{background:#6FBE5B}
+.term-bar .fname{margin-left:14px;font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--muted);letter-spacing:1px}
+.term-body{padding:18px 26px;flex:1}
+.cline{display:block;opacity:0;font-family:'JetBrains Mono',monospace;font-size:18px;line-height:1.5;
+  color:var(--cream);white-space:pre}
+.slide.play .cline{animation:fadeIn .35s forwards;animation-delay:calc(.9s + var(--i)*.15s)}
+.cline.kw{color:var(--orange)}
+.cline.cm{color:var(--muted)}
+.cline.hl{background:rgba(217,119,87,.16);border-left:3px solid var(--orange);padding-left:12px;margin-left:-15px}
+.cline .st{color:#E8C07D}
+.cline .fn{color:#8FC1E8}
+.s2-side{flex:1;min-width:0;display:flex;flex-direction:column;gap:18px}
+.chip{opacity:0;background:var(--card);border:1px solid var(--card-line);border-radius:14px;
+  padding:16px 22px;display:flex;gap:18px;align-items:flex-start}
+.slide.play .chip{animation:chipOn .55s cubic-bezier(.22,.9,.3,1) forwards}
+.slide.play .chip.c1{animation-delay:1.2s}
+.slide.play .chip.c2{animation-delay:1.7s}
+.slide.play .chip.c3{animation-delay:2.2s}
+@keyframes chipOn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+.chip .no{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:var(--orange);
+  border:1px solid rgba(217,119,87,.5);border-radius:10px;padding:4px 12px;flex:none;background:rgba(217,119,87,.08)}
+.chip .tx{display:flex;flex-direction:column;gap:6px}
+.chip .tx .t{font-size:26px;font-weight:700;color:var(--cream)}
+.chip .tx .t .code{font-family:'JetBrains Mono',monospace;font-size:23px;color:var(--orange)}
+.chip .tx .d{font-size:21px;line-height:1.5;color:var(--muted)}
+.chip .tx .d b{color:var(--cream);font-weight:700}
+.s2-note{opacity:0;background:var(--bar-dark);border:1px solid var(--bar-line);border-radius:14px;
+  padding:16px 28px;display:flex;align-items:center;gap:16px}
+.slide.play .s2-note{animation:fadeUp .7s cubic-bezier(.22,.9,.3,1) forwards;animation-delay:2.7s}
+.s2-note .ic{font-family:'JetBrains Mono',monospace;font-size:24px;color:var(--orange);flex:none}
+.s2-note p{font-size:23px;line-height:1.5;color:var(--muted)}
+.s2-note p b{color:var(--cream);font-weight:700}
+.s2-note p .o{color:var(--orange);font-weight:700}
+</style>
+</head>
+<body>
+<div id="viewport">
+  <div id="stage">
+    <div id="pageInd" class="mono"><b>01</b> / 02</div>
+
+    <!-- ========== 第一页：海报风 ========== -->
+    <section class="slide" id="slide1">
+      <div class="s1-top anim d0">
+        <div class="tag"><span class="dot"></span>CLAUDE CODE 源码最小还原 · 文件工具集</div>
+        <div class="s1-series">从「执行指令」到「处理文本」 · <b>FILE TOOLS</b></div>
+      </div>
+
+      <div class="kicker anim pop d1">为 Agent 提供文件系统操作能力</div>
+
+      <div class="s1-hero">
+        <div class="s1-pre anim d1">文件工具集之</div>
+        <div class="s1-title anim d2">
+          <span class="w">Write</span>
+          <span class="r">（文件写入）实现</span>
+        </div>
+        <div class="s1-sub anim d3">代码生成的核心工具组件 —— 用 <b>「路径归一化 + 存在性探测」</b>实现安全的文件创建</div>
+      </div>
+
+      <div class="s1-card anim d4">
+        <div class="who">$ Hello，大家好，我是程序员 Cobyte</div>
+        <p><span class="m">上一小节我们讲解了文件编辑工具的实现原理，这一小节来讲解</span>文件写入（Write）工具<span class="m">的实现原理。它是 Claude Code 实现</span><span class="o">代码生成落盘</span><span class="m">的核心组件，我们基于最小化核心逻辑，剖析它如何通过</span><span class="code">路径归一化 + 存在性探测</span><span class="m">实现安全的文件创建。我们直接来看代码实现。</span></p>
+      </div>
+
+      <div class="s1-bottom anim d5">
+        <div class="chain">
+          <span class="step">resolve()</span><span>路径归一化</span>
+          <span class="arr">→</span>
+          <span class="step">access()</span><span>存在性探测</span>
+          <span class="arr">→</span>
+          <span class="step">writeFile()</span><span>安全落盘</span>
+        </div>
+        <div class="next">点击任意处继续 <b>▍</b></div>
+      </div>
+    </section>
+
+    <!-- ========== 第二页：核心机制 ========== -->
+    <section class="slide" id="slide2">
+      <div class="s2-head">
+        <div class="tag anim d0"><span class="dot"></span>核心机制 · CORE MECHANISM</div>
+        <h1 class="anim d1">先问<span class="o">「存在吗」</span>，再决定<span class="o">「怎么说」</span></h1>
+        <div class="sub anim d2">用 <span class="code">access</span> 探测文件是否已存在：区分「覆盖 / 新建」不是逻辑分叉，而是为了<b>返回文案</b>——让用户和大模型知道这次到底发生了什么</div>
+      </div>
+
+      <div class="s2-main">
+        <div class="term anim d2">
+          <div class="term-bar">
+            <span class="c c1"></span><span class="c c2"></span><span class="c c3"></span>
+            <span class="fname">write.ts — 最小核心实现</span>
+          </div>
+          <div class="term-body">
+<span class="cline" style="--i:0"><span class="kw">import</span> { access, mkdir, writeFile } <span class="kw">from</span> <span class="st">'node:fs/promises'</span>;</span>
+<span class="cline" style="--i:1"><span class="kw">import</span> { dirname, resolve } <span class="kw">from</span> <span class="st">'node:path'</span>;</span>
+<span class="cline" style="--i:2"> </span>
+<span class="cline" style="--i:3"><span class="kw">async function</span> <span class="fn">writeTool</span>({ filePath, content }) {</span>
+<span class="cline" style="--i:4">  <span class="kw">const</span> abs = <span class="fn">resolve</span>(filePath); <span class="cm">// ① 路径归一化</span></span>
+<span class="cline" style="--i:5"> </span>
+<span class="cline" style="--i:6">  <span class="kw">let</span> existed = <span class="kw">true</span>;</span>
+<span class="cline" style="--i:7">  <span class="kw">try</span> {</span>
+<span class="cline hl" style="--i:8">    <span class="kw">await</span> <span class="fn">access</span>(abs);  <span class="cm">// ② 存在性探测</span></span>
+<span class="cline" style="--i:9">  } <span class="kw">catch</span> {</span>
+<span class="cline hl" style="--i:10">    existed = <span class="kw">false</span>;    <span class="cm">// 抛异常 → 新建</span></span>
+<span class="cline" style="--i:11">  }</span>
+<span class="cline" style="--i:12"> </span>
+<span class="cline" style="--i:13">  <span class="kw">await</span> <span class="fn">mkdir</span>(<span class="fn">dirname</span>(abs), { recursive: <span class="kw">true</span> }); <span class="cm">// ③ 建齐父目录</span></span>
+<span class="cline" style="--i:14">  <span class="kw">await</span> <span class="fn">writeFile</span>(abs, content, <span class="st">'utf8'</span>); <span class="cm">// UTF-8 落盘</span></span>
+<span class="cline" style="--i:15"> </span>
+<span class="cline" style="--i:16">  <span class="kw">return</span> existed</span>
+<span class="cline" style="--i:17">    ? <span class="st">`文件已成功更新：${abs}`</span>   <span class="cm">// 覆盖</span></span>
+<span class="cline" style="--i:18">    : <span class="st">`文件已成功创建于：${abs}`</span>; <span class="cm">// 新建</span></span>
+<span class="cline" style="--i:19">}</span>
+          </div>
+        </div>
+
+        <div class="s2-side">
+          <div class="chip c1">
+            <div class="no">01</div>
+            <div class="tx">
+              <div class="t"><span class="code">access()</span> 存在性探测</div>
+              <div class="d">没抛异常 → 已存在，记为<b>「覆盖」</b>；抛异常 → 不存在，记为<b>「新建」</b>。这道防线被完整保留。</div>
+            </div>
+          </div>
+          <div class="chip c2">
+            <div class="no">02</div>
+            <div class="tx">
+              <div class="t"><span class="code">mkdir(recursive)</span> 建齐父目录</div>
+              <div class="d"><span class="code">recursive: true</span> 一次建齐所有缺失目录，写入前永远不用担心父目录不存在。</div>
+            </div>
+          </div>
+          <div class="chip c3">
+            <div class="no">03</div>
+            <div class="tx">
+              <div class="t"><span class="code">writeFile()</span> UTF-8 落盘</div>
+              <div class="d">根据 <span class="code">existed</span> 返回<b>「文件已成功更新」</b>或<b>「文件已成功创建于」</b>——文案即状态。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="s2-note">
+        <div class="ic">[!]</div>
+        <p>真实源码还会做<b>「写前必须 Read」校验</b>、生成 <b>diff 补丁</b>、通知 <b>LSP / VSCode</b>。本小节只还原<span class="o">「路径归一化 + 存在性探测 + 写入」</span>这条核心链路，但存在性探测这道防线被完整保留了。</p>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+var stage = document.getElementById('stage');
+var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+var ind = document.getElementById('pageInd');
+var cur = 0;
+
+function fit(){
+  var s = Math.min(window.innerWidth/1920, window.innerHeight/1080);
+  stage.style.transform = 'scale(' + s + ')';
+}
+window.addEventListener('resize', fit);
+fit();
+
+function play(i){
+  cur = i;
+  slides.forEach(function(sl, idx){
+    sl.classList.remove('play');
+    if(idx === i){
+      sl.classList.add('active');
+      void sl.offsetWidth;
+      sl.classList.add('play');
+    }else{
+      sl.classList.remove('active');
+    }
+  });
+  ind.innerHTML = '<b>0' + (i+1) + '</b> / 0' + slides.length;
+}
+
+stage.addEventListener('click', function(){ play((cur+1) % slides.length); });
+document.addEventListener('keydown', function(e){
+  if(e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') play((cur+1) % slides.length);
+  if(e.key === 'ArrowLeft') play((cur-1+slides.length) % slides.length);
+  if(e.key === 'r' || e.key === 'R') play(cur);
+});
+
+var qp = new URLSearchParams(location.search).get('page');
+play(qp ? Math.min(slides.length-1, Math.max(0, parseInt(qp,10)-1)) : 0);
+</script>
+</body>
+</html>

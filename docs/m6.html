@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code 的 Bash 工具实现原理 · EP.04</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#1B1410; --term-bg:#241A16;
+    --orange:#D97757; --cream:#F5EDE4; --muted:#A89888;
+    --card-line:#3D2B1F; --bar-line:#4A3527;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:'Noto Sans SC',sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ===== 舞台：1920×1080 等比缩放 ===== */
+  #stage{width:1920px;height:1080px;position:relative;flex:none;
+    background:var(--bg);overflow:hidden;cursor:pointer;
+    transform-origin:center center;}
+
+  /* 氛围辉光（终端后方） */
+  .glow{position:absolute;left:1000px;top:140px;width:840px;height:800px;
+    background:radial-gradient(circle,rgba(217,119,87,.30) 0%,rgba(217,119,87,0) 70%);
+    pointer-events:none;}
+
+  /* ===== 主区：左标题 + 右终端（与海报一致） ===== */
+  .slide{position:absolute;inset:0;display:none;}
+  .slide.active{display:flex;}
+  #slide0{padding:150px 130px 0 140px;align-items:flex-start;gap:50px;}
+
+  .left{width:900px;flex:none;display:flex;flex-direction:column;}
+
+  /* eyebrow */
+  .eyebrow{display:flex;align-items:center;gap:16px;}
+  .eyebrow .bar{width:48px;height:6px;border-radius:3px;background:var(--orange);}
+  .eyebrow .txt{font-size:32px;font-weight:600;color:var(--orange);
+    font-family:'JetBrains Mono',monospace;}
+  /* 中文回退到更纱黑体感：直接指定 Noto Sans SC 等宽场景由 mono 类处理 */
+
+  .prefix{margin-top:40px;font-size:56px;font-weight:500;
+    color:rgba(245,237,228,.8);line-height:1.2;}
+  h1{font-size:150px;font-weight:700;line-height:1.1;color:var(--cream);
+    display:flex;align-items:center;gap:20px;margin-top:12px;}
+  h1 .en{font-family:'Noto Sans SC',sans-serif;font-weight:700;}
+  h1.title2{font-family:'Noto Sans SC',sans-serif;color:var(--orange);}
+
+  .subtitle{margin-top:36px;font-size:40px;font-weight:500;color:var(--cream);}
+  .desc{margin-top:16px;font-size:32px;color:rgba(245,237,228,.65);}
+
+  /* ===== 终端窗口（700×600，与海报一致） ===== */
+  .term{width:700px;height:600px;flex:none;margin-top:90px;
+    background:var(--term-bg);border:1.5px solid rgba(217,119,87,.4);
+    border-radius:20px;overflow:hidden;display:flex;flex-direction:column;
+    box-shadow:0 24px 60px -12px rgba(0,0,0,.5),0 0 80px rgba(217,119,87,.22);}
+  .term-bar{display:flex;align-items:center;gap:12px;padding:24px;
+    border-bottom:1px solid rgba(217,119,87,.25);}
+  .tdot{width:16px;height:16px;border-radius:50%;}
+  .tdot.o{background:var(--orange);}
+  .tdot.c{background:rgba(245,237,228,.4);}
+  .tdot.d{background:rgba(245,237,228,.15);}
+  .term-file{margin-left:12px;font-size:28px;color:rgba(245,237,228,.5);}
+
+  .term-body{flex:1;padding:36px;display:flex;flex-direction:column;gap:22px;
+    font-size:30px;line-height:1.3;}
+  .cline{display:block;opacity:0;white-space:pre;color:var(--cream);}
+  .cline .pr{color:var(--orange);font-weight:700;}
+  .cline .cm{color:rgba(245,237,228,.45);}
+  .cline .tool{color:var(--orange);font-weight:700;}
+  .cline.dim{color:rgba(245,237,228,.8);}
+  .cursor{display:inline-block;width:18px;height:32px;border-radius:2px;
+    background:var(--orange);vertical-align:-4px;opacity:0;}
+
+  /* 底部 meta（与海报一致） */
+  .meta{position:absolute;left:140px;bottom:64px;font-size:28px;
+    color:rgba(245,237,228,.5);font-family:'JetBrains Mono',monospace;}
+
+  /* ===== Slide 1：为什么需要真实的 Bash 工具 ===== */
+  #slide1{flex-direction:column;gap:28px;padding:80px 100px;}
+  .header{display:flex;justify-content:space-between;align-items:center;}
+  .tag{font-size:28px;font-weight:500;color:var(--orange);letter-spacing:2px;}
+  .indicator{font-size:28px;color:var(--muted);}
+  #slide1 h1{display:block;margin-top:0;font-size:72px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slide1 h1 .o{color:var(--orange);}
+  .sub2{font-size:30px;color:var(--muted);}
+
+  .vs-row{flex:1;display:flex;align-items:center;gap:36px;min-height:0;}
+  .v-card{border-radius:20px;padding:32px 36px;display:flex;flex-direction:column;gap:14px;}
+  .v-card.bot{flex:1;background:#211710;border:1.5px solid var(--card-line);}
+  .v-card.agent{flex:1.3;background:#2A1B12;border:2px solid var(--orange);}
+  .v-label{font-size:24px;letter-spacing:3px;color:var(--muted);}
+  .agent .v-label{color:var(--orange);}
+  .v-name{font-size:44px;font-weight:700;color:var(--cream);}
+  .v-desc{font-size:28px;color:var(--muted);}
+  .v-line{font-size:22px;color:var(--muted);}
+  .vs-x{font-size:40px;font-weight:700;color:var(--muted);flex:none;}
+  .chips{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px;}
+  .chip{font-size:26px;color:var(--cream);background:var(--bg);
+    border:1.5px solid var(--card-line);border-radius:12px;padding:10px 20px;opacity:0;}
+
+  .converge{display:flex;flex-direction:column;align-items:center;gap:8px;}
+  .cv-text{font-size:30px;color:var(--cream);}
+  .cv-arrow{color:var(--orange);font-size:26px;line-height:1;}
+  .shell-chip{font-size:40px;font-weight:700;color:#1B1410;background:var(--orange);
+    border-radius:16px;padding:16px 48px;opacity:0;}
+  .footnote{font-size:28px;color:var(--muted);text-align:center;}
+  .pageno{position:absolute;top:100px;right:130px;font-size:28px;color:var(--muted);}
+
+  /* ===== Slide 2：终端命令与命令解析器 ===== */
+  #slide2{flex-direction:column;gap:32px;padding:120px 100px;}
+  #slide2 h1{display:block;margin-top:0;font-size:72px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slide2 h1 .o{color:var(--orange);}
+
+  .flow-row{display:flex;align-items:center;gap:20px;margin-top:14px;}
+  .f-step{flex:1;display:flex;align-items:center;gap:16px;background:#211710;
+    border:1.5px solid var(--card-line);border-radius:16px;padding:24px 28px;
+    font-size:28px;color:var(--cream);}
+  .f-no{font-size:24px;font-weight:700;color:var(--orange);}
+  .f-arrow{font-size:32px;color:var(--orange);flex:none;}
+
+  .interp-label{font-size:26px;letter-spacing:3px;color:var(--muted);margin-top:24px;}
+  .cards4{display:flex;gap:22px;}
+  .i-card{flex:1;background:#211710;border:1.5px solid var(--card-line);
+    border-radius:18px;padding:28px 26px;display:flex;flex-direction:column;
+    gap:12px;position:relative;}
+  .i-card.hot{background:#2A1B12;border:2px solid var(--orange);}
+  .i-name{font-size:40px;font-weight:700;color:var(--cream);}
+  .hot .i-name{color:var(--orange);}
+  .i-desc{font-size:25px;color:var(--muted);line-height:1.45;}
+  .i-badge{position:absolute;top:24px;right:22px;font-size:22px;font-weight:700;
+    color:#1B1410;background:var(--orange);border-radius:8px;padding:4px 14px;}
+
+  /* ===== Slide 3：命令执行的具体流程 ===== */
+  #slide3{flex-direction:column;gap:22px;padding:90px 120px;}
+  #slide3 h1{display:block;margin-top:0;font-size:68px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slide3 h1 .o{color:var(--orange);}
+  .steps{flex:1;display:flex;flex-direction:column;gap:16px;position:relative;min-height:0;}
+  .steps::before{content:"";position:absolute;left:48px;top:40px;bottom:40px;width:2px;
+    background:var(--bar-line);}
+  .x-step{display:flex;gap:26px;align-items:flex-start;background:#211710;
+    border:1.5px solid var(--card-line);border-radius:16px;padding:18px 28px 18px 16px;}
+  .x-num{flex:none;width:66px;height:66px;border-radius:50%;border:2px solid var(--orange);
+    display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;
+    color:var(--orange);background:var(--bg);position:relative;z-index:1;}
+  .x-step.err .x-num{background:var(--orange);color:#1B1410;}
+  .x-body{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0;}
+  .x-title{font-size:30px;font-weight:700;color:var(--cream);}
+  .x-title .o{color:var(--orange);}
+  .x-desc{font-size:25px;color:var(--muted);line-height:1.45;}
+  .x-desc code,.x-note code{font-family:'JetBrains Mono',monospace;color:var(--cream);
+    background:rgba(217,119,87,.14);border-radius:6px;padding:2px 8px;font-size:23px;}
+  .x-note{margin-top:8px;font-size:24px;color:var(--cream);line-height:1.45;
+    border-left:3px solid var(--orange);padding:8px 16px;
+    background:rgba(217,119,87,.08);border-radius:0 10px 10px 0;}
+
+  /* ===== Slide 4：Node.js child_process ===== */
+  #slide4{flex-direction:column;gap:22px;padding:70px 100px;}
+  #slide4 h1{display:block;margin-top:0;font-size:64px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slide4 h1 .o{color:var(--orange);}
+  .sub3{font-size:26px;color:var(--muted);}
+  .sub3 .hl{color:var(--orange);font-weight:600;}
+  .methods{flex:1;display:flex;gap:24px;min-height:0;}
+  .m-card{flex:1;background:#211710;border:1.5px solid var(--card-line);
+    border-radius:18px;padding:26px;display:flex;flex-direction:column;
+    gap:14px;min-width:0;}
+  .m-card.hot{background:#2A1B12;border:2px solid var(--orange);}
+  .m-head{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .m-name{font-size:38px;font-weight:700;color:var(--cream);}
+  .hot .m-name{color:var(--orange);}
+  .m-badge{flex:none;font-size:22px;font-weight:700;color:#1B1410;
+    background:var(--orange);border-radius:8px;padding:4px 14px;}
+  .m-badge.ghost{background:transparent;color:var(--muted);
+    border:1.5px solid var(--bar-line);}
+  .m-props{display:flex;flex-direction:column;gap:8px;}
+  .m-prop{display:flex;gap:12px;align-items:baseline;font-size:23px;
+    color:var(--muted);line-height:1.4;}
+  .m-k{flex:none;width:62px;font-size:20px;font-weight:700;color:var(--orange);}
+  .m-prop .wt{color:var(--cream);}
+  .m-warn{font-size:22px;color:var(--cream);line-height:1.4;
+    border-left:3px solid var(--orange);padding:6px 14px;
+    background:rgba(217,119,87,.08);border-radius:0 10px 10px 0;}
+  .m-code{flex:1;background:var(--bg);border:1px solid var(--card-line);
+    border-radius:12px;padding:18px 20px;font-size:17px;line-height:1.6;
+    color:var(--cream);white-space:pre;overflow:hidden;}
+  .m-code .c{color:rgba(245,237,228,.4);}
+  .m-code .k{color:var(--orange);font-weight:700;}
+
+  /* ===== Slide 5：Claude Code 为什么选 execFile ===== */
+  #slide5{flex-direction:column;gap:24px;padding:90px 110px;}
+  #slide5 h1{display:block;margin-top:0;font-size:72px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slide5 h1 .o{color:var(--orange);}
+  .why-row{flex:1;display:flex;gap:26px;align-items:stretch;min-height:0;}
+  .why-left{flex:1.15;display:flex;flex-direction:column;gap:20px;min-width:0;}
+  .w-card{flex:1;background:#211710;border:1.5px solid var(--card-line);
+    border-radius:18px;padding:24px 28px;display:flex;flex-direction:column;gap:10px;}
+  .w-tag{font-size:22px;letter-spacing:2px;color:var(--muted);}
+  .w-title{font-size:32px;font-weight:700;color:var(--cream);}
+  .w-title .bad{color:var(--orange);}
+  .w-body{font-size:23px;color:var(--muted);line-height:1.5;}
+  .w-body code{font-family:'JetBrains Mono',monospace;color:var(--cream);
+    background:rgba(217,119,87,.14);border-radius:6px;padding:2px 8px;font-size:21px;}
+  .w-flow{font-family:'JetBrains Mono',monospace;font-size:21px;color:var(--cream);
+    background:var(--bg);border:1px solid var(--card-line);border-radius:10px;
+    padding:12px 16px;white-space:pre;overflow:hidden;}
+  .w-flow .dim{color:rgba(245,237,228,.4);}
+  .why-arrow{align-self:center;font-size:44px;color:var(--orange);flex:none;}
+  .win-card{flex:1;background:#2A1B12;border:2px solid var(--orange);
+    border-radius:20px;padding:28px 32px;display:flex;flex-direction:column;
+    gap:16px;min-width:0;box-shadow:0 0 48px rgba(217,119,87,.18);}
+  .win-head{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .win-name{font-size:40px;font-weight:700;color:var(--orange);}
+  .win-list{display:flex;flex-direction:column;gap:14px;}
+  .win-item{display:flex;gap:14px;font-size:24px;color:var(--cream);line-height:1.45;}
+  .win-item .ck{color:var(--orange);font-weight:700;flex:none;}
+  .win-item .dim{color:var(--muted);}
+  .concl{display:flex;align-items:center;justify-content:center;gap:16px;
+    font-size:28px;color:var(--cream);}
+  .concl .hl{color:var(--orange);font-weight:700;}
+  .concl .ck{color:var(--orange);font-weight:700;}
+
+  /* ===== 入场动画 ===== */
+  .anim{opacity:0;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(28px);}to{opacity:1;transform:none;}}
+  @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.2;}}
+  @keyframes glowPulse{0%,100%{text-shadow:0 0 48px rgba(217,119,87,.35),0 0 16px rgba(217,119,87,.5);}
+    50%{text-shadow:0 0 64px rgba(217,119,87,.55),0 0 24px rgba(217,119,87,.7);}}
+
+  .slide.play .d0{animation:fadeUp .6s ease .10s forwards;}
+  .slide.play .d1{animation:fadeUp .6s ease .35s forwards;}
+  .slide.play .d2{animation:fadeUp .6s ease .55s forwards;}
+  .slide.play .d3{animation:fadeUp .6s ease .75s forwards;}
+  .slide.play .d4{animation:fadeUp .6s ease .95s forwards;}
+  .slide.play .d5{animation:fadeUp .6s ease 1.25s forwards;}
+  .slide.play .d6{animation:fadeUp .6s ease 1.45s forwards;}
+  .slide.play .d7{animation:fadeUp .6s ease 1.65s forwards;}
+
+  .slide.play .term{animation:fadeUp .7s ease .9s forwards;}
+  .slide.play .t1{animation:fadeIn .3s ease 1.4s forwards;}
+  .slide.play .t2{animation:fadeIn .3s ease 1.8s forwards;}
+  .slide.play .t3{animation:fadeIn .3s ease 2.2s forwards;}
+  .slide.play .t4{animation:fadeIn .3s ease 2.6s forwards;}
+  .slide.play .t5{animation:fadeIn .3s ease 3.0s forwards;}
+  .slide.play .t6{animation:fadeIn .3s ease 3.4s forwards;}
+  .slide.play .cursor{animation:fadeIn .2s ease 3.8s forwards,blink 1.1s step-end 4.0s infinite;}
+  .slide.play .title2{animation:fadeUp .6s ease .75s forwards;}
+
+  /* ===== Slide 1 动画编排 ===== */
+  @keyframes popIn{0%{opacity:0;transform:scale(.85);}60%{opacity:1;transform:scale(1.03);}100%{opacity:1;transform:scale(1);}}
+  @keyframes chipOn{0%{opacity:0;transform:translateX(24px);}
+    50%{opacity:1;border-color:var(--orange);box-shadow:0 0 24px rgba(217,119,87,.35);}
+    100%{opacity:1;transform:none;}}
+  @keyframes shellGlow{0%,100%{box-shadow:0 0 24px rgba(217,119,87,.35);}
+    50%{box-shadow:0 0 48px rgba(217,119,87,.6);}}
+  #slide1.slide.play .v1{animation:popIn .6s ease .9s forwards;}
+  #slide1.slide.play .vx{animation:fadeIn .4s ease 1.2s forwards;}
+  #slide1.slide.play .v2{animation:popIn .6s ease 1.4s forwards;}
+  #slide1.slide.play .a1{animation:chipOn .5s ease 1.8s forwards;}
+  #slide1.slide.play .a2{animation:chipOn .5s ease 2.1s forwards;}
+  #slide1.slide.play .a3{animation:chipOn .5s ease 2.4s forwards;}
+  #slide1.slide.play .a4{animation:chipOn .5s ease 2.7s forwards;}
+  #slide1.slide.play .a5{animation:chipOn .5s ease 3.0s forwards;}
+  #slide1.slide.play .cv{animation:fadeUp .6s ease 3.6s forwards;}
+  #slide1.slide.play .shell-chip{animation:popIn .5s ease 4.1s forwards,shellGlow 2.4s ease-in-out 4.6s infinite;}
+  #slide1.slide.play .fn{animation:fadeIn .6s ease 4.8s forwards;}
+
+  /* ===== Slide 2 动画编排 ===== */
+  #slide2.slide.play .f1{animation:popIn .5s ease .9s forwards;}
+  #slide2.slide.play .fa1{animation:fadeIn .3s ease 1.15s forwards;}
+  #slide2.slide.play .f2{animation:popIn .5s ease 1.35s forwards;}
+  #slide2.slide.play .fa2{animation:fadeIn .3s ease 1.6s forwards;}
+  #slide2.slide.play .f3{animation:popIn .5s ease 1.8s forwards;}
+  #slide2.slide.play .ilabel{animation:fadeIn .5s ease 2.2s forwards;}
+  #slide2.slide.play .c1{animation:chipOn .5s ease 2.4s forwards;}
+  #slide2.slide.play .c2{animation:chipOn .5s ease 2.7s forwards;}
+  #slide2.slide.play .c3{animation:chipOn .5s ease 3.0s forwards;}
+  #slide2.slide.play .c4{animation:chipOn .5s ease 3.3s forwards;}
+  #slide2.slide.play .fn2{animation:fadeIn .6s ease 3.9s forwards;}
+
+  /* ===== Slide 3 动画编排 ===== */
+  #slide3.slide.play .s1{animation:chipOn .5s ease .9s forwards;}
+  #slide3.slide.play .s2{animation:chipOn .5s ease 1.3s forwards;}
+  #slide3.slide.play .s2n{animation:fadeIn .5s ease 1.8s forwards;}
+  #slide3.slide.play .s3{animation:chipOn .5s ease 2.2s forwards;}
+  #slide3.slide.play .s4{animation:chipOn .5s ease 2.6s forwards;}
+  #slide3.slide.play .fn3{animation:fadeIn .6s ease 3.2s forwards;}
+
+  /* ===== Slide 4 动画编排 ===== */
+  #slide4.slide.play .p1{animation:chipOn .5s ease .9s forwards;}
+  #slide4.slide.play .p2{animation:chipOn .5s ease 1.3s forwards;}
+  #slide4.slide.play .p3{animation:chipOn .5s ease 1.7s forwards;}
+  #slide4.slide.play .pc1{animation:fadeIn .5s ease 2.2s forwards;}
+  #slide4.slide.play .pc2{animation:fadeIn .5s ease 2.5s forwards;}
+  #slide4.slide.play .pc3{animation:fadeIn .5s ease 2.8s forwards;}
+  #slide4.slide.play .w2{animation:fadeIn .5s ease 3.1s forwards;}
+  #slide4.slide.play .fn4{animation:fadeIn .6s ease 3.5s forwards;}
+
+  /* ===== Slide 5 动画编排 ===== */
+  #slide5.slide.play .pa{animation:chipOn .5s ease .9s forwards;}
+  #slide5.slide.play .pb{animation:chipOn .5s ease 1.3s forwards;}
+  #slide5.slide.play .arr{animation:fadeIn .4s ease 1.7s forwards;}
+  #slide5.slide.play .win{animation:popIn .5s ease 2.0s forwards;}
+  #slide5.slide.play .k1{animation:fadeIn .4s ease 2.4s forwards;}
+  #slide5.slide.play .k2{animation:fadeIn .4s ease 2.7s forwards;}
+  #slide5.slide.play .k3{animation:fadeIn .4s ease 3.0s forwards;}
+  #slide5.slide.play .wc{animation:fadeIn .5s ease 3.3s forwards;}
+  #slide5.slide.play .fn5{animation:fadeIn .6s ease 3.7s forwards;}
+
+  /* ===== Slide 6：Bash Shell 工具实现 ===== */
+  #slide6{flex-direction:column;gap:20px;padding:78px 110px;}
+  #slide6 h1{display:block;margin-top:0;font-size:66px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slide6 h1 .o{color:var(--orange);}
+  .p6-body{flex:1;display:flex;gap:24px;align-items:stretch;min-height:0;}
+  .p6-left{flex:1.02;display:flex;flex-direction:column;gap:16px;min-width:0;}
+  .p6-card{flex:1;background:#211710;border:1.5px solid var(--card-line);
+    border-radius:18px;padding:22px 26px;display:flex;flex-direction:column;
+    gap:10px;min-width:0;}
+  .p6-card.hot{background:#2A1B12;border:2px solid var(--orange);}
+  .p6-tag{font-size:22px;letter-spacing:2px;color:var(--muted);}
+  .p6-title{font-size:30px;font-weight:700;color:var(--cream);}
+  .p6-title .o{color:var(--orange);}
+  .p6-txt{font-size:23px;color:var(--muted);line-height:1.5;}
+  .p6-txt code{font-family:'JetBrains Mono',monospace;color:var(--cream);
+    background:rgba(217,119,87,.14);border-radius:6px;padding:2px 8px;font-size:21px;}
+  .p6-os{display:flex;gap:12px;font-size:22px;color:var(--muted);line-height:1.5;}
+  .p6-os .osn{color:var(--orange);font-weight:700;flex:none;}
+  .p6-flow{font-family:'JetBrains Mono',monospace;font-size:21px;color:var(--cream);
+    background:var(--bg);border:1px solid var(--card-line);border-radius:10px;
+    padding:12px 16px;white-space:pre;overflow:hidden;line-height:1.45;}
+
+  .p6-right{flex:1.12;display:flex;flex-direction:column;min-width:0;}
+  .fpipe{display:flex;flex-direction:column;justify-content:center;gap:0;flex:1;min-height:0;}
+  .fnode{background:#211710;border:1.5px solid var(--card-line);border-radius:12px;
+    padding:13px 18px;font-family:'JetBrains Mono',monospace;font-size:21px;
+    color:var(--cream);line-height:1.45;}
+  .fnode.key{border-color:rgba(217,119,87,.5);background:#2A1B12;}
+  .fnode .o{color:var(--orange);font-weight:700;}
+  .fnode .sub{color:var(--muted);font-size:19px;padding-left:16px;display:block;line-height:1.5;}
+  .fconn{text-align:center;color:var(--orange);font-size:20px;line-height:1.15;padding:5px 0;}
+
+  /* ===== Slide 6 动画编排 ===== */
+  #slide6.slide.play .pa{animation:chipOn .5s ease .9s forwards;}
+  #slide6.slide.play .pb{animation:chipOn .5s ease 1.3s forwards;}
+  #slide6.slide.play .pc{animation:fadeIn .5s ease 2.0s forwards;}
+  #slide6.slide.play .fn1{animation:fadeIn .5s ease 1.6s forwards;}
+  #slide6.slide.play .fc1{animation:fadeIn .4s ease 1.8s forwards;}
+  #slide6.slide.play .fn2{animation:fadeIn .5s ease 2.0s forwards;}
+  #slide6.slide.play .fc2{animation:fadeIn .4s ease 2.2s forwards;}
+  #slide6.slide.play .fn3{animation:fadeIn .5s ease 2.4s forwards;}
+  #slide6.slide.play .fc3{animation:fadeIn .4s ease 2.6s forwards;}
+  #slide6.slide.play .fn4{animation:fadeIn .5s ease 2.8s forwards;}
+  #slide6.slide.play .fc4{animation:fadeIn .4s ease 3.0s forwards;}
+  #slide6.slide.play .fn5{animation:fadeIn .5s ease 3.2s forwards;}
+  #slide6.slide.play .fc5{animation:fadeIn .4s ease 3.4s forwards;}
+  #slide6.slide.play .fn6{animation:fadeIn .5s ease 3.6s forwards;}
+
+  /* ===== Slide NEW：跨平台一致性（核心论点）===== */
+  #slideX{flex-direction:column;gap:30px;padding:90px 100px;justify-content:center;}
+  #slideX h1{display:block;margin-top:0;font-size:74px;font-weight:700;
+    color:var(--cream);line-height:1.2;}
+  #slideX h1 .o{color:var(--orange);}
+  .plat-row{display:flex;gap:24px;justify-content:center;margin-top:8px;}
+  .plat{font-size:30px;font-weight:600;color:var(--cream);background:#211710;
+    border:1.5px solid var(--card-line);border-radius:14px;padding:14px 38px;opacity:0;}
+  .core-box{background:#2A1B12;border:2px solid var(--orange);border-radius:18px;
+    padding:34px 44px;box-shadow:0 0 48px rgba(217,119,87,.18);}
+  .core-txt{font-size:32px;color:var(--cream);line-height:1.6;text-align:center;}
+  .core-txt b{color:var(--orange);}
+  #slideX.slide.play .nx1{animation:fadeUp .6s ease 1.4s forwards;}
+  #slideX.slide.play .nx2{animation:chipOn .5s ease 1.7s forwards;}
+  #slideX.slide.play .nx3{animation:chipOn .5s ease 1.9s forwards;}
+  #slideX.slide.play .nx4{animation:chipOn .5s ease 2.1s forwards;}
+  #slideX.slide.play .nx5{animation:popIn .5s ease 2.4s forwards,shellGlow 2.4s ease-in-out 2.9s infinite;}
+  #slideX.slide.play .nx6{animation:fadeUp .6s ease 3.0s forwards;}
+  #slideX.slide.play .fnx{animation:fadeIn .6s ease 3.6s forwards;}
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+  <!-- ========== SLIDE 0 封面 ========== -->
+  <section class="slide" id="slide0">
+  <div class="glow"></div>
+  <div class="pageno mono anim d7">01 / 08</div>
+    <!-- 左：标题区 -->
+    <div class="left">
+      <div class="eyebrow anim d0">
+        <div class="bar"></div>
+        <div class="txt">程序员 COBYTE · 源码最小还原系列 EP.04</div>
+      </div>
+      <div class="prefix anim d1">Claude Code 的</div>
+      <h1 class="anim d2"><span class="en">Bash</span>工具</h1>
+      <h1 class="title2 anim">实现原理</h1>
+      <div class="subtitle anim d5">《Claude Code 源码最小还原实现》</div>
+      <div class="desc anim d6">从「假 Bash」到「真 Bash」——让 Agent 真的在本地跑命令</div>
+    </div>
+
+    <!-- 右：终端窗口 -->
+    <div class="term anim">
+      <div class="term-bar">
+        <div class="tdot o"></div><div class="tdot c"></div><div class="tdot d"></div>
+        <div class="term-file mono">cobyte@agent: ~/bash-tool</div>
+      </div>
+      <div class="term-body mono">
+        <span class="cline t1"><span class="pr">$ </span>python agent.py --milestone 04</span>
+        <span class="cline t2"><span class="cm"># LLM 返回 tool_use 块</span></span>
+        <span class="cline t3"><span class="tool">Bash</span>({ "command": "ls -la" })</span>
+        <span class="cline t4"><span class="cm"># 本地执行 · stdout 回传</span></span>
+        <span class="cline t5 dim">exit 0 · drwxr-xr-x · 12 files</span>
+        <span class="cline t6"><span class="pr">$ </span><span class="cursor"></span></span>
+      </div>
+    </div>
+  <div class="meta anim d7">程序员 Cobyte · Claude Code 源码系列 · 第 10 期</div>
+  </section>
+
+  <!-- ========== SLIDE NEW 跨平台一致性（核心论点）========== -->
+  <section class="slide" id="slideX">
+    <div class="header anim d0">
+      <div class="tag mono">CROSS-PLATFORM CONSISTENCY · THE CORE IDEA</div>
+      <div class="indicator mono">02 / 08</div>
+    </div>
+    <h1 class="anim d1">核心目标：<span class="o">跨平台一致性</span></h1>
+    <p class="sub2 anim d2">怎么在 Windows 与 Linux 两套完全不同的操作系统上，让模型发出的每一条命令，都以同一种「<span style="color:var(--orange);font-weight:600;">bash 语义</span>」跑起来，并拿到一致的输出</p>
+
+    <div class="converge anim nx1">
+      <div class="plat-row">
+        <div class="plat anim nx2">macOS</div>
+        <div class="plat anim nx3">Linux</div>
+        <div class="plat anim nx4">Windows</div>
+      </div>
+      <div class="cv-arrow">▼</div>
+      <div class="shell-chip mono anim nx5">$ bash（或 zsh）执行</div>
+    </div>
+
+    <div class="core-box anim nx6">
+      <div class="core-txt">不管用户装的是 macOS、Linux 还是 Windows —— Claude Code 都只用 <b>bash（或 zsh）</b> 来执行命令</div>
+    </div>
+
+    <p class="footnote fnx mono anim">// 这，就是 Claude Code 的 Bash 工具的主要实现原理</p>
+  </section>
+
+  <!-- ========== SLIDE 1 为什么需要真实的 Bash 工具 ========== -->
+  <section class="slide" id="slide1">
+    <div class="header anim d0">
+      <div class="tag mono">AGENT VS CHATBOT · WHY BASH TOOL</div>
+      <div class="indicator mono">03 / 08</div>
+    </div>
+    <h1 class="anim d1">为什么需要<span class="o">真实的 Bash 工具</span>？</h1>
+    <p class="sub2 anim d2">先抛出一个核心问题 —— Agent 和普通聊天机器人到底有什么区别？</p>
+
+    <div class="vs-row">
+      <div class="v-card bot anim v1">
+        <div class="v-label mono">CHATBOT</div>
+        <div class="v-name">普通聊天机器人</div>
+        <div class="v-desc">只会「根据问题生成一段文本」</div>
+        <div class="v-line mono">text in → text out，仅此而已</div>
+      </div>
+      <div class="vs-x mono anim vx">VS</div>
+      <div class="v-card agent anim v2">
+        <div class="v-label mono">AGENT · 智能体</div>
+        <div class="v-name">能动手改变世界</div>
+        <div class="chips">
+          <div class="chip a1">读取项目文件</div>
+          <div class="chip a2">运行测试</div>
+          <div class="chip a3">安装依赖</div>
+          <div class="chip a4">修改代码</div>
+          <div class="chip a5">执行构建</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="converge anim cv">
+      <div class="cv-text">所有这些能力，最终都归结为一个底层动作</div>
+      <div class="cv-arrow">▼</div>
+      <div class="shell-chip mono">$ 执行 Shell 命令</div>
+    </div>
+
+    <p class="footnote fn mono anim">// 现在我们就先从终端命令说起，从底层理解 Bash 工具的运行原理</p>
+  </section>
+
+  <!-- ========== SLIDE 2 终端命令与命令解析器 ========== -->
+  <section class="slide" id="slide2">
+    <div class="header anim d0">
+      <div class="tag mono">TERMINAL · COMMAND INTERPRETER</div>
+      <div class="indicator mono">04 / 08</div>
+    </div>
+    <p class="sub2 anim d2">通过终端命令操控计算机，是 DOS、Linux 等系统中最为常用的交互方式</p>
+    <h1 class="anim d1">核心组件：<span class="o">命令解析器</span></h1>
+    
+    <div class="flow-row">
+      <div class="f-step anim f1"><span class="f-no mono">01</span>接收用户输入的字符串</div>
+      <div class="f-arrow anim fa1">→</div>
+      <div class="f-step anim f2"><span class="f-no mono">02</span>解析命令语义</div>
+      <div class="f-arrow anim fa2">→</div>
+      <div class="f-step anim f3"><span class="f-no mono">03</span>调度相应的程序执行</div>
+    </div>
+
+    <div class="interp-label mono anim ilabel">常见命令解析器</div>
+    <div class="cards4">
+      <div class="i-card anim c1">
+        <div class="i-name mono">Shell</div>
+        <div class="i-desc">Unix 类系统中的通用命令行解释器</div>
+      </div>
+      <div class="i-card hot anim c2">
+        <div class="i-badge">本节主角</div>
+        <div class="i-name mono">Bash</div>
+        <div class="i-desc">Linux 及许多 Unix-like 系统默认使用的 Shell</div>
+      </div>
+      <div class="i-card anim c3">
+        <div class="i-name mono">cmd</div>
+        <div class="i-desc">Windows 传统命令行解释器</div>
+      </div>
+      <div class="i-card anim c4">
+        <div class="i-name mono">PowerShell</div>
+        <div class="i-desc">微软推出的跨平台任务自动化与配置管理框架，集命令行与脚本语言于一体（Windows 10 起默认提供）</div>
+      </div>
+    </div>
+
+    <p class="footnote fn2 mono anim">// 本质上：将用户键入的文本翻译成系统能理解的操作，并调用对应的可执行程序</p>
+  </section>
+
+  <!-- ========== SLIDE 3 命令执行的具体流程 ========== -->
+  <section class="slide" id="slide3">
+    <div class="header anim d0">
+      <div class="tag mono">COMMAND EXECUTION FLOW</div>
+      <div class="indicator mono">05 / 08</div>
+    </div>
+    <h1 class="anim d1">命令执行的<span class="o">具体流程</span></h1>
+    <p class="sub2 anim d2">当用户在终端中输入一条命令后，系统会按以下步骤处理</p>
+
+    <div class="steps">
+      <div class="x-step anim s1">
+        <div class="x-num mono">01</div>
+        <div class="x-body">
+          <div class="x-title">判断是否<span class="o">包含路径</span></div>
+          <div class="x-desc">若命令显式给出文件路径（如 <code>/usr/bin/ls</code> 或 <code>C:\tools\node.exe</code>），则直接读取该路径下的可执行文件并运行——即绝对路径或相对路径执行。</div>
+        </div>
+      </div>
+      <div class="x-step anim s2">
+        <div class="x-num mono">02</div>
+        <div class="x-body">
+          <div class="x-title">区分<span class="o">内部命令</span>与外部命令</div>
+          <div class="x-desc">未指定路径时，解析器先检查是否为内部命令（解释器自身内置的功能，如 Linux 的 <code>cd</code>、Windows 的 <code>dir</code>）。内部命令常驻内存，无需额外加载即可执行。</div>
+          <div class="x-note anim s2n">注意：<code>ls</code> 在大多数 Linux 发行版中属于外部命令（位于 <code>/bin/ls</code>），而非内部命令，此处需加以区分。</div>
+        </div>
+      </div>
+      <div class="x-step anim s3">
+        <div class="x-num mono">03</div>
+        <div class="x-body">
+          <div class="x-title">在 <span class="o">PATH 环境变量</span>中查找</div>
+          <div class="x-desc">既非内部命令也未带路径时，解析器在 <code>PATH</code> 定义的目录列表中依次搜索匹配的可执行文件。日常配置软件时需设置 <code>PATH</code>，正是为了让系统能找到命令程序。</div>
+        </div>
+      </div>
+      <div class="x-step err anim s4">
+        <div class="x-num mono">04</div>
+        <div class="x-body">
+          <div class="x-title"><span class="o">报错处理</span></div>
+          <div class="x-desc">若以上步骤均未找到匹配的可执行文件，命令解析器返回「命令未找到」的错误信息，如 <code>bash: foo: command not found</code>。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 4 Node.js child_process ========== -->
+  <section class="slide" id="slide4">
+    <div class="header anim d0">
+      <div class="tag mono">NODE.JS · CHILD_PROCESS</div>
+      <div class="indicator mono">06 / 08</div>
+    </div>
+    <h1 class="anim d1">在 Node.js 中怎么<span class="o">执行命令</span>？</h1>
+    <p class="sub2 anim d2">内置 <b>child_process</b> 子进程模块——创建子进程，让 Node.js 执行其他程序或系统命令</p>
+    <p class="sub3 anim d3">核心区别：<span class="hl">是否创建 Shell</span> · <span class="hl">流式 or 缓冲</span> · <span class="hl">同步或异步</span></p>
+
+    <div class="methods">
+      <div class="m-card hot anim p1">
+        <div class="m-head">
+          <div class="m-name mono">spawn</div>
+          <div class="m-badge">核心方法</div>
+        </div>
+        <div class="m-props">
+          <div class="m-prop"><span class="m-k mono">SHELL</span><span>不创建，<span class="wt">直接执行指定程序</span></span></div>
+          <div class="m-prop"><span class="m-k mono">DATA</span><span><span class="wt">流式（Stream）</span>逐块返回输出</span></div>
+          <div class="m-prop"><span class="m-k mono">USE</span><span>长时间运行 / 大量输出的命令</span></div>
+        </div>
+        <div class="m-code mono anim pc1"><span class="k">import</span> { spawn } <span class="k">from</span> 'node:child_process';
+
+<span class="k">const</span> child = <span class="k">spawn</span>('ls', ['-lh', '/usr']);
+
+<span class="c">// 流式获取标准输出</span>
+child.stdout.on('data', (data) =&gt; {
+  console.log(`stdout: ${data}`);
+});
+
+<span class="c">// 进程结束，拿到退出码</span>
+child.on('close', (code) =&gt; {
+  console.log(`退出码 ${code}`);
+});</div>
+      </div>
+
+      <div class="m-card anim p2">
+        <div class="m-head">
+          <div class="m-name mono">exec</div>
+          <div class="m-badge ghost">便捷方法</div>
+        </div>
+        <div class="m-props">
+          <div class="m-prop"><span class="m-k mono">SHELL</span><span><span class="wt">创建 Shell</span>（bash / cmd.exe）</span></div>
+          <div class="m-prop"><span class="m-k mono">DATA</span><span><span class="wt">缓冲</span>全部输出，一次性回调</span></div>
+          <div class="m-prop"><span class="m-k mono">USE</span><span>短时、输出量小的命令</span></div>
+        </div>
+        <div class="m-warn anim w2">⚠ 把用户输入直接拼进命令字符串，会带来命令注入风险</div>
+        <div class="m-code mono anim pc2"><span class="k">import</span> { exec } <span class="k">from</span> 'node:child_process';
+
+<span class="c">// 在 Shell 中执行完整命令字符串</span>
+<span class="k">exec</span>('ls -lh /usr',
+  (error, stdout, stderr) =&gt; {
+  <span class="k">if</span> (error) <span class="k">return</span> console.error(error);
+  <span class="c">// 缓冲后的完整输出</span>
+  console.log(stdout);
+});</div>
+      </div>
+
+      <div class="m-card anim p3">
+        <div class="m-head">
+          <div class="m-name mono">execFile</div>
+          <div class="m-badge ghost">更高效</div>
+        </div>
+        <div class="m-props">
+          <div class="m-prop"><span class="m-k mono">SHELL</span><span>默认<span class="wt">不创建</span>，更轻量高效</span></div>
+          <div class="m-prop"><span class="m-k mono">DATA</span><span>缓冲回调（同 exec）</span></div>
+          <div class="m-prop"><span class="m-k mono">USE</span><span>直跑可执行文件，无需管道 <span class="wt">|</span>、重定向 <span class="wt">&gt;</span></span></div>
+        </div>
+        <div class="m-code mono anim pc3"><span class="k">import</span> { execFile } <span class="k">from</span> 'node:child_process';
+
+<span class="c">// 不创建 Shell，直接执行文件</span>
+<span class="k">execFile</span>('bash', ['--version'],
+  (err, stdout) =&gt; {
+  console.log(stdout);
+});</div>
+      </div>
+    </div>
+
+    <p class="footnote fn4 mono anim">// spawn 是核心——exec、execFile 等高级方法大多基于它实现</p>
+  </section>
+
+  <!-- ========== SLIDE 5 Claude Code 为什么选 execFile ========== -->
+  <section class="slide" id="slide5">
+    <div class="header anim d0">
+      <div class="tag mono">CLAUDE CODE SOURCE · TOOL CHOICE</div>
+      <div class="indicator mono">07 / 08</div>
+    </div>
+    <h1 class="anim d1">Claude Code 为什么选 <span class="o">execFile</span>？</h1>
+    <p class="sub2 anim d2">源码中的命令执行工具选择了 execFile 而非 exec，这背后有多重考量</p>
+
+    <div class="why-row">
+      <div class="why-left">
+        <div class="w-card anim pa">
+          <div class="w-tag mono">隐患 01 · EXEC</div>
+          <div class="w-title"><span class="bad">exec</span> 会隐式创建 Shell</div>
+          <div class="w-body">Windows 上默认调用 <code>cmd.exe</code>，其解析语义与 Bash 存在显著差异，给跨平台命令执行带来隐患。</div>
+          <div class="w-flow">exec('ls -la')  <span class="dim">→  cmd.exe /c ...  ≠  bash 语义</span></div>
+        </div>
+        <div class="w-card anim pb">
+          <div class="w-tag mono">隐患 02 · SPAWN</div>
+          <div class="w-title"><span class="bad">spawn</span> 需要手动拼流</div>
+          <div class="w-body"><code>stdout</code> / <code>stderr</code> 是 Stream，要手动监听 <code>data</code> 事件、拼接 chunk、处理编码转换——繁琐且容易出错。</div>
+          <div class="w-flow">stdout.on('data', chunk =&gt; buf += chunk)  <span class="dim">// 繁琐</span></div>
+        </div>
+      </div>
+
+      <div class="why-arrow anim arr">▶</div>
+
+      <div class="win-card anim win">
+        <div class="win-head">
+          <div class="win-name mono">execFile</div>
+          <div class="m-badge">源码之选</div>
+        </div>
+        <div class="win-list">
+          <div class="win-item anim k1"><span class="ck">✓</span><span>显式指定 Bash 解析命令<span class="dim">——Windows / Linux / macOS 行为一致</span></span></div>
+          <div class="win-item anim k2"><span class="ck">✓</span><span>底层细节全部封装<span class="dim">——回调一次拿到完整输出字符串</span></span></div>
+          <div class="win-item anim k3"><span class="ck">✓</span><span>场景匹配<span class="dim">——输出拼成字符串返回给大模型，无需流式</span></span></div>
+        </div>
+        <div class="m-code mono anim wc"><span class="k">execFile</span>('bash', ['-c', cmd],
+  (err, stdout) =&gt; {
+  <span class="c">// 完整输出 → 返回给 LLM</span>
+});</div>
+      </div>
+    </div>
+
+    <div class="concl fn5 anim">跨平台一致 <span class="ck">✓</span> · 代码简洁 <span class="ck">✓</span> —— <span class="hl">execFile</span> 是更合适的选择</div>
+  </section>
+
+  <!-- ========== SLIDE 6 Bash Shell 工具实现 ========== -->
+  <section class="slide" id="slide6">
+    <div class="header anim d0">
+      <div class="tag mono">CLAUDE CODE · BASH SHELL TOOL</div>
+      <div class="indicator mono">08 / 08</div>
+    </div>
+    <h1 class="anim d1">Bash Shell 工具的<span class="o">实现</span></h1>
+    <p class="sub2 anim d2">概括而言，围绕两点展开：统一的执行入口 与 跨平台的 Shell 路径定位</p>
+
+    <div class="p6-body">
+      <div class="p6-left">
+        <div class="p6-card hot anim pa">
+          <div class="p6-tag mono">核心点 01 · 执行入口</div>
+          <div class="p6-title">统一的<span class="o">执行入口</span></div>
+          <div class="p6-txt">为保证各操作系统下命令执行结果一致，工具统一通过系统自带的 <code>bash</code> 程序来运行 Shell 命令。</div>
+          <div class="p6-txt">在 Node.js 中借助 <code>child_process</code> 的 <code>execFile</code> 方法，直接调用 bash 可执行文件，将待执行命令作为参数传入。</div>
+          <div class="p6-flow mono anim pc">execFile('bash', ['-c', command])</div>
+        </div>
+        <div class="p6-card anim pb">
+          <div class="p6-tag mono">核心点 02 · 路径定位</div>
+          <div class="p6-title">跨平台的 Shell <span class="o">路径定位</span></div>
+          <div class="p6-txt">关键在于如何在不同操作系统上准确找到 bash 程序文件的路径。</div>
+          <div class="p6-os"><span class="osn">Linux</span><span>系统默认路径或 <code>which</code> 命令查找，处理直接</span></div>
+          <div class="p6-os"><span class="osn">Windows</span><span>早期强制依赖 Git-Bash：先定位 Git 程序路径 → 反推 Git Bash 位置；失败则报错，提示必须安装 Git-Bash</span></div>
+        </div>
+      </div>
+
+      <div class="p6-right">
+        <div class="fpipe">
+          <div class="fnode anim fn1">模型的 command（如 <span class="o">"ls -la"</span>）</div>
+          <div class="fconn anim fc1">▼</div>
+          <div class="fnode anim fn2">bashTool.call()  <span class="o">── 夹紧 timeout 到 [1ms, 600s]</span></div>
+          <div class="fconn anim fc2">▼</div>
+          <div class="fnode key anim fn3">findSuitableShell()  <span class="o">── 选出一个「真能跑」的 bash</span>
+            <span class="sub">· 优先 CLAUDE_CODE_SHELL（Win / Linux / macOS）</span>
+            <span class="sub">· Windows：findGitBashPath() 反推 Git Bash → 写进 $SHELL</span>
+            <span class="sub">· Linux/macOS：$SHELL → which → 默认目录</span>
+          </div>
+          <div class="fconn anim fc3">▼</div>
+          <div class="fnode anim fn4">execFile(bash, ['-c', command], { timeout, maxBuffer })  <span class="o">── 真正拉起子进程</span></div>
+          <div class="fconn anim fc4">▼</div>
+          <div class="fnode anim fn5">拼 stdout/stderr +（超时提示 / Exit code N）<br>→ 去空行 → 截断 30_000 字符</div>
+          <div class="fconn anim fc5">▼</div>
+          <div class="fnode key anim fn6">tool_result <span class="o">回喂模型</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  const slides = ['slide0','slideX','slide1','slide2','slide3','slide4','slide5','slide6'].map(id=>document.getElementById(id));
+  let cur = 0;
+
+  function fit(){
+    const s = Math.min(innerWidth/1920, innerHeight/1080);
+    stage.style.transform = `scale(${s})`;
+  }
+  addEventListener('resize', fit); fit();
+
+  function play(i){
+    slides.forEach((sl,idx)=>sl.classList.toggle('active', idx===i));
+    cur = i;
+    restart();
+  }
+
+  function restart(){
+    const sl = slides[cur];
+    sl.classList.remove('play');
+    void sl.offsetWidth;               // 强制回流，重置动画
+    sl.classList.add('play');
+  }
+
+  const next = ()=>play((cur+1)%slides.length);   // 点击任意处 → 下一页
+  stage.addEventListener('click', next);
+  addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter') next();
+    if(e.key==='ArrowLeft') play((cur-1+slides.length)%slides.length);
+    if(e.key==='r'||e.key==='R') restart();
+  });
+
+  play(0);
+</script>
+</body>
+</html>

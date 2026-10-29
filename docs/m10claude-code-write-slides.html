@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude Code 到底是怎么“写”代码的？· 源码剖析</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#1B1410;
+  --card:#261B14;
+  --card-line:#3D2B1F;
+  --orange:#D97757;
+  --cream:#F5EDE4;
+  --muted:#A89888;
+  --bar-dark:#2A1D15;
+  --bar-line:#4A3527;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-family:'Noto Sans SC',sans-serif}
+#stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;transform-origin:center;background:var(--bg);cursor:pointer;overflow:hidden}
+#stage::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(217,119,87,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(217,119,87,.045) 1px,transparent 1px);
+  background-size:64px 64px}
+.slide{position:absolute;inset:0;display:none;flex-direction:column;padding:100px;gap:36px}
+.slide.active{display:flex}
+
+/* ===== 通用元件 ===== */
+.tag{font-family:'JetBrains Mono',monospace;font-size:20px;letter-spacing:3px;color:var(--orange);font-weight:500}
+.tag::before{content:"▸ "}
+h1{font-size:72px;font-weight:900;color:var(--cream);line-height:1.15}
+h1 .hl{color:var(--orange)}
+.subtitle{font-size:28px;color:var(--muted);line-height:1.5;font-weight:400}
+.subtitle b{color:var(--cream);font-weight:700}
+.card{background:var(--card);border:1px solid var(--card-line);border-radius:14px}
+.pager{position:absolute;top:48px;right:64px;font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--muted)}
+.pager b{color:var(--orange);font-weight:700}
+.footer{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:18px;
+  border-top:1px solid var(--bar-line);padding-top:24px;
+  font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--muted)}
+.footer .brand::before{content:"● ";color:var(--orange)}
+
+/* ===== 动画基座 ===== */
+.slide .anim{opacity:0}
+.slide.play .anim{animation:fadeUp .7s cubic-bezier(.22,.9,.3,1) forwards;animation-delay:var(--d,0s)}
+.slide.play .anim.fade{animation-name:fadeIn}
+.slide.play .anim.pop{animation-name:popIn}
+.slide.play .anim.chip{animation-name:chipOn}
+@keyframes fadeUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{0%{opacity:0;transform:scale(.86)}70%{opacity:1;transform:scale(1.03)}100%{opacity:1;transform:scale(1)}}
+@keyframes chipOn{from{opacity:0;transform:translateX(-48px)}to{opacity:1;transform:none}}
+@keyframes drawX{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes packet{from{left:0}to{left:calc(100% - 14px)}}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 0 0 rgba(217,119,87,0)}50%{box-shadow:0 0 26px 2px rgba(217,119,87,.32)}}
+
+/* ===== 终端窗口 ===== */
+.term{background:#150E09;border:1px solid var(--card-line);border-radius:14px;overflow:hidden;text-align:left}
+.term-bar{display:flex;align-items:center;gap:10px;padding:16px 22px;background:var(--bar-dark);border-bottom:1px solid var(--card-line)}
+.term-bar i{width:16px;height:16px;border-radius:50%;display:block}
+.term-bar i:nth-child(1){background:#E0604F}.term-bar i:nth-child(2){background:#D9A857}.term-bar i:nth-child(3){background:#7BA05B}
+.term-bar span{margin-left:12px;font-family:'JetBrains Mono',monospace;font-size:19px;color:var(--muted)}
+.term-body{padding:28px 34px;font-family:'JetBrains Mono',monospace;font-size:22px;line-height:1.85;color:var(--cream)}
+.cline{display:block;opacity:0;white-space:pre}
+.slide.play .cline{animation:fadeIn .25s forwards;animation-delay:var(--d,0s)}
+.cline.hl{background:rgba(217,119,87,.16);border-left:3px solid var(--orange);padding-left:14px;margin-left:-17px}
+.c-kw{color:var(--orange);font-weight:700}
+.c-fn{color:#E8B48C}
+.c-str{color:#9CB380}
+.c-cm{color:rgba(168,152,136,.75)}
+.c-out1{color:rgba(245,237,228,.35)}
+.c-out2{color:rgba(245,237,228,.65)}
+.cursor::after{content:"▍";color:var(--orange);animation:blink 1s infinite}
+
+/* ===== 封面海报（Slide 1） ===== */
+#slide1{align-items:center;text-align:center;gap:28px}
+#slide1::after{content:"";position:absolute;top:-12%;left:50%;transform:translateX(-50%);
+  width:1300px;height:640px;background:radial-gradient(closest-side,rgba(217,119,87,.16),transparent);
+  pointer-events:none}
+#slide1 h1{font-size:88px}
+#slide1 .subtitle{max-width:1040px}
+#slide1 .term-body{font-size:21px;line-height:1.65;padding:22px 34px}
+.lead{font-size:23px;color:var(--muted);line-height:1.7;font-weight:400;max-width:1150px}
+.lead b{color:var(--cream);font-weight:700}
+.lead code{font-family:'JetBrains Mono',monospace;font-size:21px;color:var(--orange)}
+.chips{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.chip-tag{font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--muted);
+  border:1px solid var(--card-line);border-radius:999px;padding:10px 24px;background:var(--card);letter-spacing:1px}
+.chip-tag b{color:var(--orange);font-weight:700}
+
+/* ===== Slide 2 流程图 ===== */
+.flow{display:flex;align-items:center;gap:0;margin-top:4px}
+.node{width:330px;flex:none;background:var(--card);border:1px solid var(--card-line);border-radius:14px;
+  padding:20px 18px;text-align:center}
+.node .ico{font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--orange);margin-bottom:9px;font-weight:700;letter-spacing:1px}
+.node .t{font-size:23px;font-weight:700;color:var(--cream);line-height:1.3}
+.node .d{font-size:17px;color:var(--muted);margin-top:8px;line-height:1.5}
+.node .d code{font-family:'JetBrains Mono',monospace;font-size:16px;color:var(--orange);background:rgba(217,119,87,.1);padding:1px 6px;border-radius:5px}
+.wire{position:relative;flex:1;height:3px;background:var(--bar-line);margin:0 6px}
+.wire i{position:absolute;inset:0;background:var(--orange);transform:scaleX(0);transform-origin:left}
+.slide.play .wire i{animation:drawX .6s ease forwards;animation-delay:var(--d,0s)}
+.wire b{position:absolute;top:-5.5px;width:14px;height:14px;border-radius:50%;background:var(--orange);opacity:0;left:0}
+.slide.play .wire b{opacity:1;animation:packet 1.5s linear infinite;animation-delay:var(--pd,1.2s)}
+
+.callout{display:flex;align-items:center;gap:22px;background:rgba(217,119,87,.1);
+  border:1px solid rgba(217,119,87,.45);border-radius:14px;padding:24px 34px}
+.callout .q{font-family:'JetBrains Mono',monospace;font-size:24px;color:var(--orange);font-weight:700;flex:none}
+.callout .p{font-size:25px;color:var(--cream);line-height:1.5}
+.callout .p b{color:var(--orange);font-weight:700}
+
+/* ===== Slide 3 骨架图 ===== */
+.cols{display:flex;gap:48px;flex:1;min-height:0}
+.col-l{flex:1.15;min-width:0;display:flex;flex-direction:column;justify-content:center}
+.col-r{flex:1;min-width:0;display:flex;flex-direction:column;gap:20px;justify-content:center}
+.skel{display:flex;flex-direction:column}
+.snode{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:18px 26px;text-align:left}
+.snode.prompt{text-align:center;font-size:23px;font-weight:700;color:var(--cream);padding:15px}
+.snode.prompt .ico{font-family:'JetBrains Mono',monospace;color:var(--orange);font-weight:700}
+.stitle{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.stitle .mono{font-family:'JetBrains Mono',monospace;font-size:24px;font-weight:700;color:var(--orange)}
+.sbadge{font-family:'JetBrains Mono',monospace;font-size:16px;color:var(--muted);border:1px solid var(--card-line);border-radius:6px;padding:3px 10px}
+.sdesc{font-size:19px;color:var(--muted);margin-top:9px;line-height:1.55}
+.sdesc b{color:var(--cream)}
+.sarrow{text-align:center;color:var(--orange);font-family:'JetBrains Mono',monospace;font-size:18px;line-height:1;padding:6px 0}
+.tools-row{display:flex;gap:12px}
+.tool{flex:1;background:rgba(217,119,87,.08);border:1px solid rgba(217,119,87,.42);border-radius:12px;
+  padding:13px 8px;text-align:center;display:flex;flex-direction:column;gap:6px}
+.tool b{font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--orange)}
+.tool span{font-size:16px;color:var(--muted)}
+.mini-card{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:22px 28px}
+.mini-card .mt{display:flex;align-items:center;gap:14px;font-size:24px;font-weight:700;color:var(--cream)}
+.mini-card .mt .dot{width:13px;height:13px;border-radius:50%;background:var(--orange);flex:none}
+.mini-card .mt .mono{font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--orange);font-weight:500;margin-left:auto}
+.mini-card .md{font-size:19px;color:var(--muted);margin-top:11px;line-height:1.6}
+.mini-card .md code{font-family:'JetBrains Mono',monospace;font-size:17px;color:var(--orange);background:rgba(217,119,87,.1);padding:1px 7px;border-radius:5px}
+.mini-card .md b{color:var(--cream)}
+.note{display:flex;align-items:center;gap:18px;border:1px dashed rgba(217,119,87,.55);border-radius:14px;
+  padding:18px 30px;font-size:22px;color:var(--cream);background:rgba(217,119,87,.06)}
+.note .badge{flex:none;font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--bg);
+  background:var(--orange);border-radius:8px;padding:6px 14px}
+.note b{color:var(--orange)}
+
+/* ===== Slide 4 端到端实例 ===== */
+.hsteps{display:flex;gap:14px}
+.hstep{flex:1;background:var(--card);border:1px solid var(--card-line);border-radius:12px;
+  padding:14px 18px;display:flex;flex-direction:column;gap:7px}
+.hstep .no{font-family:'JetBrains Mono',monospace;font-size:16px;color:var(--orange);font-weight:700;letter-spacing:1px}
+.hstep .tt{font-size:20px;font-weight:700;color:var(--cream);line-height:1.3}
+.hstep .tt b{color:var(--orange)}
+.hstep .dd{font-size:14px;color:var(--muted);line-height:1.45}
+.hstep .dd code{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--orange);background:rgba(217,119,87,.1);padding:1px 5px;border-radius:4px}
+
+/* ===== Slide 5 关键认知 ===== */
+.duo{display:flex;gap:44px}
+.duo-card{flex:1;background:var(--card);border:1px solid var(--card-line);border-radius:16px;
+  padding:32px 40px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:14px}
+.duo-card::before{content:"";position:absolute;top:0;left:0;right:0;height:5px;background:var(--orange)}
+.duo-card.harn::before{background:var(--muted)}
+.duo-card .lab{font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--orange);letter-spacing:2px;font-weight:700}
+.duo-card.harn .lab{color:var(--muted)}
+.duo-card .big{font-size:32px;font-weight:900;color:var(--cream);line-height:1.3}
+.duo-card .big b{color:var(--orange)}
+.duo-card .d{font-size:20px;color:var(--muted);line-height:1.6}
+.duo-card .d b{color:var(--cream)}
+.duo-card .d code{font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--orange);background:rgba(217,119,87,.1);padding:1px 6px;border-radius:5px}
+.punch{text-align:center;padding:32px 56px;border:1px solid rgba(217,119,87,.5);border-radius:16px;
+  background:rgba(217,119,87,.08)}
+.punch .line1{font-size:30px;font-weight:700;color:var(--cream);line-height:1.5}
+.punch .line1 b{color:var(--orange)}
+.punch .line2{font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--orange);margin-top:12px;letter-spacing:1px}
+.qa{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:26px 34px}
+.qa-q{font-size:26px;font-weight:900;color:var(--cream);display:flex;align-items:center;gap:14px}
+.qa-q::before{content:"Q";font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--bg);
+  background:var(--orange);border-radius:6px;padding:4px 10px}
+.qa-a{font-size:21px;color:var(--muted);line-height:1.65;margin-top:12px}
+.qa-a b{color:var(--cream)}
+.qa-a code{font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--orange)}
+</style>
+</head>
+<body>
+<div id="stage">
+
+<!-- ============ Slide 1 · 封面海报 ============ -->
+<section class="slide" id="slide1">
+  <div class="pager"><b>01</b> / 05</div>
+  <div class="anim tag" style="--d:.1s">CLAUDE CODE 源码剖析 · 写代码机制</div>
+  <h1 class="anim" style="--d:.35s">Claude Code 到底是怎么<br><span class="hl">“写”代码</span>的？</h1>
+  <div class="anim subtitle" style="--d:.6s">从 <b>「模型产代码」</b> 到 <b>「Harness 落盘」</b></div>
+  <div class="anim chips" style="--d:.75s">
+    <span class="chip-tag"><b>一个循环</b></span>
+    <span class="chip-tag"><b>一张注册表</b></span>
+    <span class="chip-tag"><b>四个基础工具</b></span>
+  </div>
+  <div class="anim lead" style="--d:.9s">前面已经讲了 <code>Bash</code> · <code>Read</code> · <code>Write</code> · <code>Edit</code> 四个工具——这一节，让 Mini Claude Code 从零写一个 <b>Vue3 TodoList</b>，看清「写代码」到底是怎么发生的。</div>
+  <div class="anim pop term" style="--d:1.15s;width:1000px">
+    <div class="term-bar"><i></i><i></i><i></i><span>model → harness — 写代码的本质链路</span></div>
+    <div class="term-body">
+<span class="cline" style="--d:1.45s"><span class="c-cm">// 模型负责「说」—— 输出结构化 tool_use</span></span>
+<span class="cline" style="--d:1.65s">{ <span class="c-kw">"name"</span>: <span class="c-str">"Write"</span>, <span class="c-kw">"file_path"</span>: <span class="c-str">"src/App.vue"</span>, <span class="c-kw">"content"</span>: <span class="c-str">"…"</span> }</span>
+<span class="cline" style="--d:1.85s"><span class="c-cm">// harness 负责「做」—— 查表 → FileWriteTool.call()</span></span>
+<span class="cline hl" style="--d:2.05s"><span class="c-fn">mkdir</span>(dir) + <span class="c-fn">fs.writeFile</span>(path, content)  →  ✓ 落盘<span class="cursor"></span></span>
+    </div>
+  </div>
+  <div class="anim fade footer" style="--d:2.5s"><span class="brand">程序员Cobyte</span><span> Claude Code 源码最小还原实现</span></div>
+</section>
+
+<!-- ============ Slide 2 · 一、本质 ============ -->
+<section class="slide" id="slide2" style="gap:26px">
+  <div class="pager"><b>02</b> / 05</div>
+  <div class="anim tag" style="--d:.1s">THE ESSENCE · 本质</div>
+  <h1 class="anim" style="--d:.3s;font-size:56px">一、本质：<span class="hl">模型产代码，harness 落盘</span></h1>
+  <div class="anim subtitle" style="--d:.5s;font-size:23px">模型本身不直接操作文件系统，它只负责「说」；真正把代码写到磁盘的，是宿主程序里的<b>工具函数</b>。</div>
+  <div class="flow">
+    <div class="anim pop node" style="--d:.75s">
+      <div class="ico">01 · SAY</div>
+      <div class="t">模型负责「说」</div>
+      <div class="d">输出的是 <code>tool_use</code> 块，<br>而不是代码文件本身</div>
+    </div>
+    <div class="wire" style="--d:1.05s;--pd:1.3s"><i></i><b></b></div>
+    <div class="anim pop node" style="--d:1.2s">
+      <div class="ico">02 · DO</div>
+      <div class="t">harness 负责「做」</div>
+      <div class="d">查表 → <code>FileWriteTool.call()</code><br>→ 写入磁盘</div>
+    </div>
+    <div class="wire" style="--d:1.5s;--pd:1.75s"><i></i><b></b></div>
+    <div class="anim pop node" style="--d:1.65s">
+      <div class="ico">03 · LOOK</div>
+      <div class="t">模型负责「看」</div>
+      <div class="d"><code>tool_result</code> 回传，<br>决定下一步</div>
+    </div>
+  </div>
+  <div class="anim pop term" style="--d:2s">
+    <div class="term-bar"><i></i><i></i><i></i><span>model → harness — 说与做的完整链路</span></div>
+    <div class="term-body" style="font-size:20px;line-height:1.6">
+<span class="cline" style="--d:2.3s"><span class="c-cm">// ① 模型负责「说」—— 输出结构化 tool_use</span></span>
+<span class="cline" style="--d:2.5s">{ <span class="c-kw">"name"</span>: <span class="c-str">"Write"</span>, <span class="c-kw">"input"</span>: { <span class="c-kw">"file_path"</span>: <span class="c-str">"src/App.vue"</span>, <span class="c-kw">"content"</span>: <span class="c-str">"...代码..."</span> } }</span>
+<span class="cline" style="--d:2.7s"><span class="c-cm">// ② harness 负责「做」—— 查表 → FileWriteTool.call()</span></span>
+<span class="cline hl" style="--d:2.9s">    <span class="c-fn">mkdir</span>(<span class="c-fn">dirname</span>(file_path), { recursive: <span class="c-kw">true</span> })   <span class="c-cm">// 建目录</span></span>
+<span class="cline hl" style="--d:3.1s">    fs.<span class="c-fn">writeFile</span>(file_path, content)                  <span class="c-cm">// 写文件 ← 落盘</span><span class="cursor"></span></span>
+    </div>
+  </div>
+  <div class="anim callout" style="--d:3.3s">
+    <span class="q">一句话</span>
+    <span class="p"><b>模型产代码，harness 落盘</b> —— 这就是「写代码」的实现本质</span>
+  </div>
+  <div class="anim fade footer" style="--d:3.6s"><span class="brand">程序员Cobyte</span><span>模型产代码 · harness 落盘</span></div>
+</section>
+
+<!-- ============ Slide 3 · 二、骨架 ============ -->
+<section class="slide" id="slide3" style="gap:24px;padding:72px 100px">
+  <div class="pager"><b>03</b> / 05</div>
+  <div class="anim tag" style="--d:.05s">THE SKELETON · 骨架</div>
+  <h1 class="anim" style="--d:.25s;font-size:56px">二、最基础的骨架：<span class="hl">一个循环 + 一张注册表 + 四个工具</span></h1>
+  <div class="anim subtitle" style="--d:.45s;font-size:22px">Mini Claude Code 的「智能」小得惊人，整个骨架只靠三块拼起来。</div>
+  <div class="cols">
+    <div class="col-l">
+      <div class="skel">
+        <div class="anim pop snode prompt" style="--d:.6s"><span class="ico">$</span> 用户 prompt</div>
+        <div class="anim sarrow" style="--d:.75s">▼</div>
+        <div class="anim pop snode" style="--d:.85s">
+          <div class="stitle"><span class="mono">query.ts</span><span class="sbadge">Agent Loop</span></div>
+          <div class="sdesc">一条 <b>while 循环</b> · 反复：调模型 → 拿 <b>tool_use</b> → 执行 → 回喂结果</div>
+        </div>
+        <div class="anim sarrow" style="--d:1s">▼</div>
+        <div class="anim pop snode" style="--d:1.1s">
+          <div class="stitle"><span class="mono">tools.ts</span><span class="sbadge">工具注册表</span></div>
+          <div class="sdesc"><b>findToolByName</b> 查表分发 → 调对应 <b>call()</b></div>
+        </div>
+        <div class="anim sarrow" style="--d:1.25s">▼</div>
+        <div class="anim pop tools-row" style="--d:1.4s">
+          <div class="tool"><b>Bash</b><span>跑命令</span></div>
+          <div class="tool"><b>Read</b><span>读文件</span></div>
+          <div class="tool"><b>Write</b><span>写文件</span></div>
+          <div class="tool"><b>Edit</b><span>改文件</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-r">
+      <div class="anim mini-card" style="--d:.7s">
+        <div class="mt"><span class="dot"></span>循环<span class="mono">query.ts</span></div>
+        <div class="md">一条 <code>while</code> 循环反复「调模型 → 拿 <code>tool_use</code> → 执行 → 回喂结果」。没有预设步骤，下一步<b>完全由模型动态决定</b>。</div>
+      </div>
+      <div class="anim mini-card" style="--d:.95s">
+        <div class="mt"><span class="dot"></span>注册表<span class="mono">tools.ts</span></div>
+        <div class="md">模型要什么工具，就用 <code>findToolByName</code> 查表分发，调对应的 <code>call()</code>。</div>
+      </div>
+      <div class="anim mini-card" style="--d:1.2s">
+        <div class="mt"><span class="dot"></span>四个工具</div>
+        <div class="md"><code>Bash</code>（execFile + bash -c 跑命令）、<code>Read</code>（readFile + 行号）、<code>Write</code>（mkdir + writeFile）、<code>Edit</code>（精确字符串替换）</div>
+      </div>
+    </div>
+  </div>
+  <div class="anim note" style="--d:1.6s">
+    <span class="badge">WRAP UP</span>
+    <span>四个工具覆盖「<b>读、写、改、跑</b>」四种真实系统能力，构成了写代码所需的<b>完整手脚</b>。</span>
+  </div>
+  <div class="anim fade footer" style="--d:1.85s"><span class="brand">程序员Cobyte</span><span>循环 · 注册表 · 四个工具</span></div>
+</section>
+
+<!-- ============ Slide 4 · 三、端到端实例 ============ -->
+<section class="slide" id="slide4" style="gap:20px;padding:60px 100px">
+  <div class="pager"><b>04</b> / 05</div>
+  <div class="anim tag" style="--d:.05s">THE END-TO-END EXAMPLE · 端到端实例</div>
+  <h1 class="anim" style="--d:.2s;font-size:54px">三、一个<span class="hl">端到端实例</span></h1>
+  <div class="anim subtitle" style="--d:.35s;font-size:21px">让 Mini Claude Code 从零写一个 Vue3 TodoList——一个非常接近日常开发的例子。</div>
+  <div class="anim pop term" style="--d:.55s">
+    <div class="term-bar"><i></i><i></i><i></i><span>任务需求 · vue-todo-app</span></div>
+    <div class="term-body" style="font-size:17px;line-height:1.42;padding:20px 34px">
+<span class="cline" style="--d:.8s"><span class="c-kw">$</span> cd D:\workspace\202608\mini-claude-code\nodejs</span>
+<span class="cline c-cm" style="--d:.95s"># 创建一个简洁但功能丰富的 Vue3 TodoList 应用</span>
+<span class="cline" style="--d:1.1s"><span class="c-kw">$</span> echo y | pnpm create vite vue-todo-app --template vue-ts</span>
+<span class="cline c-cm" style="--d:1.25s"># 修改 src/App.vue 和组件，实现以下功能：</span>
+<span class="cline c-cm" style="--d:1.4s">#  · 任务增删改查：添加、删除、编辑（双击）、标记完成</span>
+<span class="cline c-cm" style="--d:1.55s">#  · 分类筛选：全部 / 进行中 / 已完成</span>
+<span class="cline c-cm" style="--d:1.7s">#  · 统计信息：总任务、已完成、未完成数量</span>
+<span class="cline c-cm" style="--d:1.85s">#  · 数据持久化：localStorage 自动保存与恢复</span>
+<span class="cline c-cm" style="--d:2s">#  · 样式要求：渐变背景（蓝到紫）</span>
+<span class="cline c-cm" style="--d:2.15s">#  · 卡片阴影、圆角、悬停效果，整洁美观的布局</span>
+<span class="cline c-cm" style="--d:2.3s">#  · 动画要求：任务添加/删除过渡动画（淡入淡出/缩放）</span>
+<span class="cline c-cm" style="--d:2.45s">#  · 使用 Vue 的 &lt;TransitionGroup&gt; 实现列表动画</span>
+<span class="cline c-cm" style="--d:2.6s">#  · 项目结构简洁（例如包含 TodoItem.vue 等组件）</span>
+<span class="cline" style="--d:2.75s"><span class="c-kw">$</span> pnpm install</span>
+<span class="cline hl" style="--d:2.9s"><span class="c-kw">$</span> pnpm run dev<span class="cursor"></span></span>
+    </div>
+  </div>
+  <div class="hsteps">
+    <div class="anim pop hstep" style="--d:3.1s"><div class="no">01</div><div class="tt"><b>Bash</b> 搭骨架</div><div class="dd">跑 <code>create vite</code>，或直接 Write 建文件</div></div>
+    <div class="anim pop hstep" style="--d:3.25s"><div class="no">02</div><div class="tt"><b>Write</b> 落盘</div><div class="dd">写 <code>package.json</code> / <code>App.vue</code> 等</div></div>
+    <div class="anim pop hstep" style="--d:3.4s"><div class="no">03</div><div class="tt"><b>Read</b>+<b>Edit</b> 改</div><div class="dd">读回内容，精确字符串替换</div></div>
+    <div class="anim pop hstep" style="--d:3.55s"><div class="no">04</div><div class="tt"><b>Bash</b> 验证</div><div class="dd">跑 <code>install</code> / <code>run dev</code>，回喂结果</div></div>
+    <div class="anim pop hstep" style="--d:3.7s"><div class="no">05</div><div class="tt"><b>循环</b> 收敛</div><div class="dd">决定继续修 or 收工，直到完成</div></div>
+  </div>
+  <div class="anim note" style="--d:3.9s">
+    <span class="badge">TAKEAWAY</span>
+    <span>每一步都是<b>上一步结果的函数</b>，而不是一条写死的流水线。</span>
+  </div>
+  <div class="anim fade footer" style="--d:4.2s"><span class="brand">程序员Cobyte</span><span>端到端实例 · 四工具串成闭环</span></div>
+</section>
+
+<!-- ============ Slide 5 · 四、关键认知 ============ -->
+<section class="slide" id="slide5" style="gap:28px">
+  <div class="pager"><b>05</b> / 05</div>
+  <div class="anim tag" style="--d:.1s">THE KEY INSIGHT · 关键认知</div>
+  <h1 class="anim" style="--d:.3s;font-size:56px">四、关键认知：<span class="hl">能力来自模型，落地来自工程</span></h1>
+  <div class="duo">
+    <div class="anim pop duo-card" style="--d:.6s">
+      <div class="lab">MODEL · 模型</div>
+      <div class="big">「会写代码」的<b>能力</b></div>
+      <div class="d">来自 Claude 模型本身的<b>推理与编码能力</b>——它知道 Vue3 的 TodoList 该怎么组织、语法该怎么写。</div>
+    </div>
+    <div class="anim pop duo-card harn" style="--d:.85s">
+      <div class="lab">HARNESS · 工程外壳</div>
+      <div class="big">「能动手写」的<b>落地</b></div>
+      <div class="d"><code>循环</code>负责驱动、<code>注册表</code>负责分发、<code>工具</code>负责真实系统操作、<code>tool_result</code>负责反馈闭环。</div>
+    </div>
+  </div>
+  <div class="anim punch" style="--d:1.1s">
+    <div class="line1">Claude Code 不是「一个会写代码的程序」，而是「一个被赋予终端手脚、在循环里<b>自主决策</b>的模型」。</div>
+    <div class="line2">模型产代码 · harness 落盘 —— 这就是它写代码的全部秘密</div>
+  </div>
+  <div class="anim qa" style="--d:1.35s">
+    <div class="qa-q">AI 编程工具的能力边界在哪？</div>
+    <div class="qa-a">答案不在模型，而在工具——模型再聪明也只能「说」，真正「做」的是 harness 提供的工具；<b>工具越多、越可靠，agent 能做的事就越多</b>。理解了这一层，<code>Cursor</code> / <code>Copilot</code> / <code>Claude Code</code> 都不过是在这个骨架上做加减法。</div>
+  </div>
+  <div class="anim fade footer" style="--d:1.7s"><span class="brand">程序员Cobyte</span><span>关键认知 · 能力来自模型，落地来自工程</span></div>
+</section>
+
+</div>
+<script>
+var slides=[].slice.call(document.querySelectorAll('.slide'));
+var cur=0;
+function play(i){
+  slides[cur].classList.remove('active','play');
+  cur=((i%slides.length)+slides.length)%slides.length;
+  var s=slides[cur];
+  s.classList.add('active');
+  void s.offsetWidth;
+  s.classList.add('play');
+}
+document.getElementById('stage').addEventListener('click',function(){play(cur+1)});
+window.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter')play(cur+1);
+  else if(e.key==='ArrowLeft')play(cur-1);
+  else if(e.key==='r'||e.key==='R')play(cur);
+});
+function fit(){
+  var k=Math.min(window.innerWidth/1920,window.innerHeight/1080);
+  document.getElementById('stage').style.transform='translate(-50%,-50%) scale('+k+')';
+}
+window.addEventListener('resize',fit);
+fit();
+var qp=new URLSearchParams(location.search).get('page');
+play(qp?parseInt(qp,10)-1:0);
+</script>
+</body>
+</html>

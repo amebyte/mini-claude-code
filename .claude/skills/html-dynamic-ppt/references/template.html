@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTML 动态 PPT 模板</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* ===== 设计系统：CSS 变量（暖橙深色主题） ===== */
+  :root{
+    --bg:#1B1410; --card:#261B14; --card-line:#3D2B1F;
+    --orange:#D97757; --cream:#F5EDE4; --muted:#A89888;
+    --bar-dark:#2A1D15; --bar-line:#4A3527;
+    /* 派生色 */
+    --code-bg:#211710; --hot:#2A1B12;
+    --code-str:#E0977B;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:'Noto Sans SC',sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ===== 舞台：1920×1080 等比缩放 ===== */
+  #stage{width:1920px;height:1080px;position:relative;flex:none;
+    background:var(--bg);overflow:hidden;cursor:pointer;
+    transform-origin:center center;}
+
+  .slide{position:absolute;inset:0;padding:100px;display:none;
+    flex-direction:column;gap:36px;}
+  .slide.active{display:flex;}
+
+  /* ===== 通用元素 ===== */
+  .header{display:flex;justify-content:space-between;align-items:center;}
+  .tag{font-size:28px;font-weight:500;color:var(--orange);letter-spacing:2px;}
+  .indicator{font-size:28px;color:var(--muted);}
+  h1{font-size:72px;font-weight:700;color:var(--cream);line-height:1.2;}
+  .subtitle{font-size:30px;color:var(--muted);}
+  .footnote{font-size:28px;color:var(--muted);text-align:center;}
+
+  /* ===== 动画触发基类 ===== */
+  .anim{opacity:0;}
+  .slide.play .anim{animation-fill-mode:forwards;}
+  .slide.play .d0{animation:fadeUp .6s ease .1s forwards;}
+  .slide.play .d1{animation:fadeUp .6s ease .35s forwards;}
+  .slide.play .d2{animation:fadeUp .6s ease .6s forwards;}
+
+  /* ===== 关键帧库（全部） ===== */
+  @keyframes fadeUp{from{opacity:0;transform:translateY(28px);}to{opacity:1;transform:none;}}
+  @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+  @keyframes fadeOut{to{opacity:0;}}
+  @keyframes popIn{0%{opacity:0;transform:scale(.85);}60%{opacity:1;transform:scale(1.03);}100%{opacity:1;transform:scale(1);}}
+  @keyframes drawX{from{transform:scaleX(0);}to{transform:scaleX(1);}}
+  @keyframes drawY{from{transform:scaleY(0);}to{transform:scaleY(1);}}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+  @keyframes warnPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.18);}}
+  @keyframes streamGlow{0%,100%{box-shadow:0 0 6px 1px rgba(217,119,87,.25);}50%{box-shadow:0 0 18px 5px rgba(217,119,87,.65);}}
+  @keyframes chipOn{
+    0%{opacity:0;transform:translateX(24px);}
+    50%{opacity:1;border-color:var(--orange);box-shadow:0 0 24px rgba(217,119,87,.35);}
+    100%{opacity:1;transform:none;}}
+  @keyframes glowClosed{
+    0%{box-shadow:0 0 0 0 rgba(217,119,87,0);}
+    40%{box-shadow:0 0 40px 4px rgba(217,119,87,.5);border-color:var(--orange);}
+    100%{box-shadow:0 0 20px 2px rgba(217,119,87,.25);border-color:var(--orange);}}
+  @keyframes processing{
+    0%,100%{box-shadow:0 0 0 0 rgba(217,119,87,0);}
+    50%{box-shadow:0 0 48px 6px rgba(217,119,87,.45);border-color:var(--orange);}}
+  @keyframes travel{0%{left:0;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{left:106px;opacity:0;}}
+  @keyframes travel3{0%{left:0;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{left:calc(100% - 14px);opacity:0;}}
+  @keyframes travelRev{0%{right:0;opacity:0;}8%{opacity:1;}92%{opacity:1;}100%{right:calc(100% - 14px);opacity:0;}}
+  @keyframes travelF{0%{left:0;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{left:calc(100% - 12px);opacity:0;}}
+  @keyframes travelR{0%{right:0;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{right:calc(100% - 12px);opacity:0;}}
+  @keyframes loopFwd{0%{left:0;opacity:0;}10%{opacity:1;}48%{left:calc(100% - 12px);opacity:1;}52%{left:calc(100% - 12px);opacity:0;}100%{left:0;opacity:0;}}
+  @keyframes loopRev{0%{right:0;opacity:0;}10%{opacity:1;}48%{right:calc(100% - 12px);opacity:1;}52%{right:calc(100% - 12px);opacity:0;}100%{right:0;opacity:0;}}
+  @keyframes fillBar{from{width:0;}to{width:100%;}}
+  @keyframes stripes{from{background-position:0 0;}to{background-position:40px 0;}}
+  @keyframes dimLine{to{background:var(--card-line);opacity:.35;}}
+  @keyframes closeLine{to{background:var(--card-line);opacity:.35;box-shadow:0 0 0 0 rgba(217,119,87,0);}}
+  @keyframes sepFlash{0%{opacity:0;}30%{opacity:1;background:rgba(217,119,87,.18);}100%{opacity:1;background:transparent;}}
+  @keyframes deltaPulse{50%{box-shadow:0 0 30px rgba(217,119,87,.6);border-color:var(--orange);}}
+  @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+  @keyframes xStamp{0%{transform:scale(2);opacity:0;}60%{transform:scale(.9);opacity:1;}100%{transform:scale(1);}}
+  @keyframes limIn{0%{opacity:0;transform:translateX(-24px);}100%{opacity:1;transform:none;}}
+  @keyframes kLoop{0%,100%{background:rgba(217,119,87,.16);}50%{background:rgba(217,119,87,.42);}}
+  @keyframes gapIn{from{opacity:0;transform:scale(.9);}to{opacity:1;transform:none;}}
+  @keyframes gapPulse{50%{border-color:var(--orange);box-shadow:0 0 18px rgba(217,119,87,.5);background:rgba(217,119,87,.12);}}
+  @keyframes nudge{0%,100%{transform:translateX(0);}50%{transform:translateX(16px);}}
+  @keyframes shellGlow{0%,100%{box-shadow:0 0 24px rgba(217,119,87,.35);}50%{box-shadow:0 0 48px rgba(217,119,87,.6);}}
+  @keyframes glowPulse{0%,100%{text-shadow:0 0 48px rgba(217,119,87,.35),0 0 16px rgba(217,119,87,.5);}50%{text-shadow:0 0 64px rgba(217,119,87,.55),0 0 24px rgba(217,119,87,.7);}}
+
+  /* ===== 警示条 callout（通用） ===== */
+  .callout{display:flex;align-items:center;gap:20px;padding:32px;
+    background:#231712;border:2px solid var(--orange);border-radius:16px;opacity:0;}
+  .callout p{font-size:30px;font-weight:500;color:var(--cream);}
+  .warn{flex:none;width:36px;height:36px;}
+
+  /* ===== 终端窗口 term（通用） ===== */
+  .term{background:var(--code-bg);border:1.5px solid var(--card-line);
+    border-radius:16px;overflow:hidden;display:flex;flex-direction:column;}
+  .term-bar{display:flex;align-items:center;gap:8px;padding:14px 20px;
+    background:#1A120C;border-bottom:1px solid var(--card-line);}
+  .tdot{width:12px;height:12px;border-radius:50%;background:var(--card-line);}
+  .term-file{margin-left:12px;font-size:18px;color:var(--muted);}
+  .term-body{padding:20px 26px;font-size:19px;line-height:1.6;}
+  .cline{display:block;opacity:0;white-space:pre;color:var(--cream);}
+  .cline .cm{color:var(--muted);}
+  .cline .st{color:var(--code-str);}
+  .cline .kw{color:var(--orange);}
+  .cline.hl{background:rgba(217,119,87,.16);border-left:3px solid var(--orange);
+    padding-left:12px;margin-left:-15px;}
+  .term-out{margin:4px 26px 22px;border-top:1px dashed var(--bar-line);
+    padding-top:14px;font-size:19px;line-height:1.7;}
+  .oline{display:block;opacity:0;white-space:pre;}
+  .oline .pr{color:var(--muted);}
+  .o1{color:rgba(245,237,228,.35);}
+  .o2{color:rgba(245,237,228,.65);}
+  .o3{color:var(--cream);}
+  .cursor{color:var(--orange);animation:blink 1s step-end infinite;}
+
+  /* ===== 卡牌 card ===== */
+  .flow{flex:1;display:flex;align-items:center;justify-content:center;gap:20px;}
+  .card{width:340px;height:250px;background:var(--card);
+    border:1.5px solid var(--card-line);border-radius:20px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    position:relative;opacity:0;}
+  .card .label{font-size:28px;font-weight:500;color:var(--orange);letter-spacing:3px;}
+  .card .name{font-size:40px;font-weight:700;color:var(--cream);}
+  .card .desc{font-size:28px;color:var(--muted);}
+  .card .status{position:absolute;top:18px;right:20px;font-size:20px;color:var(--orange);opacity:0;}
+
+  /* ===== 箭头组 + 数据包 ===== */
+  .arrow-group{display:flex;flex-direction:column;align-items:center;gap:12px;width:280px;position:relative;flex:none;}
+  .arrow-label{font-size:28px;font-weight:500;color:var(--orange);white-space:nowrap;}
+  .arrow-track{width:120px;height:3px;background:var(--card-line);position:relative;border-radius:2px;}
+  .arrow-line{position:absolute;inset:0;background:var(--orange);transform:scaleX(0);transform-origin:left;border-radius:2px;}
+  .arrow-head{position:absolute;right:-2px;top:50%;transform:translateY(-50%);
+    width:0;height:0;border-left:12px solid var(--orange);
+    border-top:8px solid transparent;border-bottom:8px solid transparent;opacity:0;}
+  .packet{position:absolute;top:50%;left:0;width:14px;height:14px;margin-top:-7px;
+    border-radius:50%;background:var(--orange);
+    box-shadow:0 0 12px 3px rgba(217,119,87,.7);opacity:0;}
+
+  /* ===== 时间轴 bar ===== */
+  .timeline{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:36px;}
+  .row{display:flex;align-items:center;gap:24px;}
+  .row .who{font-size:30px;font-weight:500;color:var(--cream);width:140px;}
+  .bar{width:960px;height:100px;border-radius:16px;position:relative;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;}
+  .bar-fill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:16px;}
+  .bar span{position:relative;z-index:2;font-size:30px;}
+  .bar.server-bar{background:var(--bar-dark);}
+  .bar.server-bar .bar-fill{background:var(--orange);}
+  .bar.server-bar span{color:var(--cream);font-weight:700;}
+  .bar.client-bar{background:var(--bar-dark);border:1.5px solid var(--bar-line);}
+  .bar.client-bar .bar-fill{background:rgba(217,119,87,.18);
+    background-image:repeating-linear-gradient(45deg,rgba(217,119,87,.25) 0 14px,transparent 14px 28px);}
+  .bar.client-bar span{color:var(--muted);}
+
+  /* ===== 列表 chip + 竖直轨道 ===== */
+  .step-col{display:flex;flex-direction:column;justify-content:center;gap:14px;
+    position:relative;padding-left:40px;flex:none;}
+  .rail{position:absolute;left:10px;top:56px;bottom:24px;width:2px;background:var(--card-line);}
+  .rail-fill{position:absolute;left:0;top:0;width:100%;height:100%;background:var(--orange);
+    transform:scaleY(0);transform-origin:top;}
+  .chip{background:var(--card);border:1.5px solid var(--card-line);border-radius:12px;
+    padding:12px 20px;display:flex;align-items:center;gap:16px;opacity:0;flex:none;}
+  .chip .idx{font-size:24px;color:var(--orange);width:32px;flex:none;font-weight:700;}
+  .chip .nm{font-size:24px;font-weight:700;color:var(--cream);}
+  .chip .ds{font-size:19px;color:var(--muted);}
+  .chip .bdg{margin-left:auto;flex:none;font-size:18px;color:var(--orange);
+    border:1px solid var(--orange);border-radius:8px;padding:2px 10px;}
+
+  /* ===== 对比卡 / 封面三卡 ===== */
+  .trio{display:flex;gap:28px;}
+  .pcard{flex:1;background:var(--card);border:1.5px solid var(--card-line);border-radius:16px;
+    padding:22px 28px;display:flex;flex-direction:column;gap:8px;align-items:center;
+    text-align:center;opacity:0;position:relative;}
+  .pcard .pn{font-size:28px;font-weight:700;color:var(--cream);}
+  .pcard .pd{font-size:22px;color:var(--muted);}
+  .pcard.here{border:2px solid var(--orange);background:var(--hot);}
+  .badge{position:absolute;top:-15px;right:18px;background:var(--orange);color:#1B1410;
+    font-size:19px;font-weight:700;border-radius:999px;padding:4px 14px;}
+
+  /* ===== 循环环 loop-ring ===== */
+  .loop-ring{width:400px;height:400px;flex:none;border:2px dashed var(--card-line);
+    border-radius:50%;position:relative;opacity:0;}
+  .orbit{position:absolute;inset:-2px;animation:spin 5s linear infinite;}
+  .orbit .odot{position:absolute;top:-8px;left:50%;margin-left:-8px;width:16px;height:16px;
+    border-radius:50%;background:var(--orange);box-shadow:0 0 14px 4px rgba(217,119,87,.7);}
+  .ring-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:26px;font-weight:700;color:var(--orange);letter-spacing:2px;}
+  .lnode{position:absolute;width:190px;background:var(--card);border:1.5px solid var(--card-line);
+    border-radius:14px;padding:12px 10px;text-align:center;opacity:0;}
+  .lnode .ln{font-size:22px;font-weight:700;color:var(--cream);}
+  .lnode .ls{font-size:17px;color:var(--muted);}
+  .ln-top{top:-38px;left:50%;margin-left:-95px;}
+  .ln-right{top:50%;right:-98px;margin-top:-38px;}
+  .ln-bottom{bottom:-38px;left:50%;margin-left:-95px;}
+  .ln-left{top:50%;left:-98px;margin-top:-38px;}
+
+  /* ===== 管道流程图 fpipe ===== */
+  .fpipe{display:flex;flex-direction:column;justify-content:center;gap:0;flex:1;min-height:0;}
+  .fnode{background:var(--code-bg);border:1.5px solid var(--card-line);border-radius:12px;
+    padding:13px 18px;font-family:'JetBrains Mono',monospace;font-size:21px;
+    color:var(--cream);line-height:1.45;opacity:0;}
+  .fnode.key{border-color:rgba(217,119,87,.5);background:var(--hot);}
+  .fnode .o{color:var(--orange);font-weight:700;}
+  .fnode .sub{color:var(--muted);font-size:19px;padding-left:16px;display:block;line-height:1.5;}
+  .fconn{text-align:center;color:var(--orange);font-size:20px;line-height:1.15;padding:5px 0;opacity:0;}
+
+  /* ===== 示范页动画编排（每页照此模式补充） ===== */
+  /* Slide 0 */
+  #slide0.play .pcard{animation:fadeUp .5s ease .9s forwards;}
+  #slide0.play .callout{animation:fadeUp .7s ease 1.4s forwards;}
+  #slide0.play .warn{animation:warnPulse 1s ease 1.6s 3;}
+  /* Slide 1 */
+  #slide1.play .card.client{animation:popIn .6s ease .9s forwards;}
+  #slide1.play .card.server{animation:popIn .6s ease 2.2s forwards;}
+  #slide1.play .card.server .status{animation:fadeIn .4s ease 2.6s forwards,blink 1.2s ease-in-out 3.0s infinite;}
+  #slide1.play .g1 .arrow-label{animation:fadeIn .4s ease 1.1s forwards;}
+  #slide1.play .g1 .arrow-line{animation:drawX .5s ease 1.2s forwards;}
+  #slide1.play .g1 .arrow-head{animation:fadeIn .2s ease 1.6s forwards;}
+  #slide1.play .g1 .packet{animation:travel 1.1s linear 1.4s forwards;}
+  #slide1.play .callout{animation:fadeUp .7s ease 3.2s forwards;}
+  #slide1.play .warn{animation:warnPulse 1s ease 3.4s 3;}
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+  <!-- ========== SLIDE 0 封面（示范） ========== -->
+  <section class="slide active" id="slide0">
+    <div class="header anim d0">
+      <div class="tag mono">MINI SERIES · 手搓系列</div>
+      <div class="indicator mono">01 / 02</div>
+    </div>
+    <h1 class="anim d1">这是一个标题</h1>
+    <p class="subtitle anim d2">副标题：一句话点题</p>
+
+    <div class="trio">
+      <div class="pcard here"><div class="badge">✓ 主角</div><div class="pn mono">A</div><div class="pd">描述 A</div></div>
+      <div class="pcard"><div class="pn mono">B</div><div class="pd">描述 B</div></div>
+      <div class="pcard"><div class="pn mono">C</div><div class="pd">描述 C</div></div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>结论一句话</p>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 1 组件演示 ========== -->
+  <section class="slide" id="slide1">
+    <div class="header anim d0">
+      <div class="tag mono">COMPONENTS · 组件演示</div>
+      <div class="indicator mono">02 / 02</div>
+    </div>
+    <h1 class="anim d1">组件速览</h1>
+
+    <div class="flow">
+      <div class="card client">
+        <div class="label mono">CLIENT</div>
+        <div class="name">客户端</div>
+        <div class="desc">发起请求</div>
+      </div>
+      <div class="arrow-group g1">
+        <div class="arrow-label">① 发送请求</div>
+        <div class="arrow-track">
+          <div class="arrow-line"></div>
+          <div class="packet"></div>
+          <div class="arrow-head"></div>
+        </div>
+      </div>
+      <div class="card server">
+        <div class="status mono">● processing</div>
+        <div class="label mono">SERVER</div>
+        <div class="name">服务器</div>
+        <div class="desc">处理数据</div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>把组件按分镜组合，即可拼出任意一页</p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  const slides = ['slide0','slide1'].map(id=>document.getElementById(id));
+  let cur = 0;
+
+  function fit(){
+    const s = Math.min(innerWidth/1920, innerHeight/1080);
+    stage.style.transform = `scale(${s})`;
+  }
+  addEventListener('resize', fit); fit();
+
+  function play(i){
+    slides.forEach((sl,idx)=>sl.classList.toggle('active', idx===i));
+    cur = i;
+    restart();
+  }
+
+  function restart(){
+    const sl = slides[cur];
+    sl.classList.remove('play');
+    void sl.offsetWidth;               // 强制回流，重置动画
+    sl.classList.add('play');
+  }
+
+  const next = ()=>play((cur+1)%slides.length);
+  stage.addEventListener('click', next);
+  addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter') next();
+    if(e.key==='ArrowLeft') play((cur-1+slides.length)%slides.length);
+    if(e.key==='r'||e.key==='R') restart();
+  });
+
+  play(0);
+</script>
+</body>
+</html>

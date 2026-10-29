@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="OHSHUFokEw8bMv24qSfUWV">
+<head data-page-node-id="vBZOnReHy04l0TfupYQVDC">
+<meta charset="UTF-8" data-page-node-id="WtZkV4O17rD8hE4MJdWaWH">
+<meta name="viewport" content="width=device-width,initial-scale=1" data-page-node-id="yzj9WwEq1pXaFtEaLhebnm">
+<title>Bash 工具的跨平台实现 · Claude Code 源码剖析</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" data-page-node-id="jJiKqXqoiTtHuTGDzqyvQa">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" data-page-node-id="G1HH3Rp2oFzFIujxga1HSG">
+<style>
+:root{
+  --bg:#1B1410;
+  --card:#261B14;
+  --card-line:#3D2B1F;
+  --orange:#D97757;
+  --cream:#F5EDE4;
+  --muted:#A89888;
+  --bar-dark:#2A1D15;
+  --bar-line:#4A3527;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-family:'Noto Sans SC',sans-serif}
+#stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;transform-origin:center;background:var(--bg);cursor:pointer;overflow:hidden}
+/* 背景网格 */
+#stage::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(217,119,87,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(217,119,87,.045) 1px,transparent 1px);
+  background-size:64px 64px}
+.slide{position:absolute;inset:0;display:none;flex-direction:column;padding:100px;gap:36px}
+.slide.active{display:flex}
+
+/* ===== 通用元件 ===== */
+.tag{font-family:'JetBrains Mono',monospace;font-size:20px;letter-spacing:3px;color:var(--orange);font-weight:500}
+.tag::before{content:"▸ "}
+h1{font-size:72px;font-weight:900;color:var(--cream);line-height:1.15}
+h1 .hl{color:var(--orange)}
+.subtitle{font-size:28px;color:var(--muted);line-height:1.5;font-weight:400}
+.subtitle b{color:var(--cream);font-weight:700}
+.card{background:var(--card);border:1px solid var(--card-line);border-radius:14px}
+.pager{position:absolute;top:48px;right:64px;font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--muted)}
+.pager b{color:var(--orange);font-weight:700}
+.footer{margin-top:auto;display:flex;justify-content:space-between;align-items:center;
+  border-top:1px solid var(--bar-line);padding-top:24px;
+  font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--muted)}
+.footer .brand::before{content:"● ";color:var(--orange)}
+
+/* ===== 动画基座 ===== */
+.slide .anim{opacity:0}
+.slide.play .anim{animation:fadeUp .7s cubic-bezier(.22,.9,.3,1) forwards;animation-delay:var(--d,0s)}
+.slide.play .anim.fade{animation-name:fadeIn}
+.slide.play .anim.pop{animation-name:popIn}
+.slide.play .anim.chip{animation-name:chipOn}
+@keyframes fadeUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{0%{opacity:0;transform:scale(.86)}70%{opacity:1;transform:scale(1.03)}100%{opacity:1;transform:scale(1)}}
+@keyframes chipOn{from{opacity:0;transform:translateX(-48px)}to{opacity:1;transform:none}}
+@keyframes drawX{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes packet{from{left:0}to{left:calc(100% - 14px)}}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 0 0 rgba(217,119,87,0)}50%{box-shadow:0 0 26px 2px rgba(217,119,87,.32)}}
+
+/* ===== 终端窗口 ===== */
+.term{background:#150E09;border:1px solid var(--card-line);border-radius:14px;overflow:hidden}
+.term-bar{display:flex;align-items:center;gap:10px;padding:16px 22px;background:var(--bar-dark);border-bottom:1px solid var(--card-line)}
+.term-bar i{width:16px;height:16px;border-radius:50%;display:block}
+.term-bar i:nth-child(1){background:#E0604F}.term-bar i:nth-child(2){background:#D9A857}.term-bar i:nth-child(3){background:#7BA05B}
+.term-bar span{margin-left:12px;font-family:'JetBrains Mono',monospace;font-size:19px;color:var(--muted)}
+.term-body{padding:30px 34px;font-family:'JetBrains Mono',monospace;font-size:24px;line-height:1.9;color:var(--cream)}
+.cline{display:block;opacity:0;white-space:pre}
+.slide.play .cline{animation:fadeIn .25s forwards;animation-delay:var(--d,0s)}
+.cline.hl{background:rgba(217,119,87,.16);border-left:3px solid var(--orange);padding-left:14px;margin-left:-17px}
+.c-kw{color:var(--orange);font-weight:700}
+.c-fn{color:#E8B48C}
+.c-str{color:#9CB380}
+.c-cm{color:rgba(168,152,136,.75)}
+.c-out1{color:rgba(245,237,228,.35)}
+.c-out2{color:rgba(245,237,228,.65)}
+.cursor::after{content:"▍";color:var(--orange);animation:blink 1s infinite}
+
+/* ===== Slide 2 流程图 ===== */
+.flow{display:flex;align-items:center;gap:0;margin-top:8px}
+.node{width:330px;flex:none;background:var(--card);border:1px solid var(--card-line);border-radius:14px;
+  padding:30px 26px;text-align:center}
+.node .ico{font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--orange);margin-bottom:14px;font-weight:700}
+.node .t{font-size:27px;font-weight:700;color:var(--cream);line-height:1.35}
+.node .d{font-size:20px;color:var(--muted);margin-top:10px;line-height:1.45}
+.wire{position:relative;flex:1;height:3px;background:var(--bar-line);margin:0 6px}
+.wire i{position:absolute;inset:0;background:var(--orange);transform:scaleX(0);transform-origin:left}
+.slide.play .wire i{animation:drawX .6s ease forwards;animation-delay:var(--d,0s)}
+.wire b{position:absolute;top:-5.5px;width:14px;height:14px;border-radius:50%;background:var(--orange);opacity:0;left:0}
+.slide.play .wire b{opacity:1;animation:packet 1.5s linear infinite;animation-delay:var(--pd,1.2s)}
+
+.callout{display:flex;align-items:center;gap:22px;background:rgba(217,119,87,.1);
+  border:1px solid rgba(217,119,87,.45);border-radius:14px;padding:28px 34px}
+.callout .q{font-family:'JetBrains Mono',monospace;font-size:26px;color:var(--orange);font-weight:700;flex:none}
+.callout .p{font-size:27px;color:var(--cream);line-height:1.55}
+.callout .p b{color:var(--orange);font-weight:700}
+
+/* ===== Slide 3 步骤链 ===== */
+.steps{display:flex;flex-direction:column;gap:22px}
+.step{display:flex;align-items:center;gap:28px;background:var(--card);border:1px solid var(--card-line);
+  border-radius:14px;padding:26px 34px}
+.step .no{flex:none;width:64px;height:64px;border-radius:12px;background:rgba(217,119,87,.14);
+  border:1px solid rgba(217,119,87,.5);color:var(--orange);
+  font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;
+  display:flex;align-items:center;justify-content:center}
+.step .tt{font-size:28px;font-weight:700;color:var(--cream)}
+.step .dd{font-size:22px;color:var(--muted);margin-top:6px;line-height:1.45}
+.step .dd code{font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--orange);background:rgba(217,119,87,.1);padding:2px 8px;border-radius:6px}
+.note{display:flex;align-items:center;gap:18px;border:1px dashed rgba(217,119,87,.55);border-radius:14px;
+  padding:20px 30px;font-size:23px;color:var(--cream);background:rgba(217,119,87,.06)}
+.note .badge{flex:none;font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;color:var(--bg);
+  background:var(--orange);border-radius:8px;padding:6px 14px}
+.note b{color:var(--orange)}
+
+/* ===== 两栏 ===== */
+.cols{display:flex;gap:48px;flex:1;min-height:0}
+.col-l{flex:1.15;min-width:0;display:flex;flex-direction:column}
+.col-r{flex:1;min-width:0;display:flex;flex-direction:column;gap:24px}
+.mini-card{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:30px 34px}
+.mini-card .mt{display:flex;align-items:center;gap:16px;font-size:28px;font-weight:700;color:var(--cream)}
+.mini-card .mt .dot{width:14px;height:14px;border-radius:50%;background:var(--orange);flex:none}
+.mini-card .md{font-size:22px;color:var(--muted);margin-top:14px;line-height:1.6}
+.mini-card .md code{font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--orange);background:rgba(217,119,87,.1);padding:2px 8px;border-radius:6px}
+.mini-card .md b{color:var(--cream)}
+.prio{flex:none;font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;color:var(--orange);
+  border:1px solid rgba(217,119,87,.5);border-radius:8px;padding:5px 12px;margin-left:auto}
+.slide.play .hot{animation:fadeUp .7s forwards,glowPulse 2.4s ease-in-out infinite;animation-delay:var(--d,0s),calc(var(--d,0s) + .7s)}
+
+/* ===== Slide 6 总结大卡 ===== */
+.sum-cards{display:flex;gap:48px;flex:1;min-height:0}
+.sum-card{flex:1;background:var(--card);border:1px solid var(--card-line);border-radius:18px;
+  padding:48px 44px;display:flex;flex-direction:column;gap:22px;position:relative;overflow:hidden}
+.sum-card::before{content:"";position:absolute;top:0;left:0;right:0;height:5px;background:var(--orange)}
+.sum-card .no{font-family:'JetBrains Mono',monospace;font-size:22px;color:var(--orange);letter-spacing:2px;font-weight:700}
+.sum-card .t{font-size:38px;font-weight:900;color:var(--cream);line-height:1.3}
+.sum-card .d{font-size:24px;color:var(--muted);line-height:1.65}
+.sum-card .d b{color:var(--cream)}
+.sum-card .d code{font-family:'JetBrains Mono',monospace;font-size:21px;color:var(--orange)}
+.bye{display:flex;align-items:baseline;gap:26px}
+.bye .big{font-size:42px;font-weight:900;color:var(--cream)}
+.bye .big span{color:var(--orange)}
+.bye .sm{font-size:24px;color:var(--muted)}
+</style>
+</head>
+<body data-page-node-id="VBIfOP2LoF4SAxx6ieGi1Q">
+<div id="stage" data-page-node-id="YeBuUnrByEuNMeY2YgphCv">
+
+<!-- ============ Slide 1 · 封面 ============ -->
+<section class="slide" id="slide1" data-page-node-id="JfL0znUFHQQP1HZfn41zkd">
+  <div class="pager" data-page-node-id="C7qZKxu1FACR7woPBOW721"><b data-page-node-id="J6QpHD0vTTP6qHjAaY3FLs">01</b> / 06</div>
+  <div class="anim tag" style="--d:.1s" data-page-node-id="28yoBNEWUeYBHhMCYA3FWR">CLAUDE CODE 源码剖析 · 系统梳理与总结</div>
+  <h1 class="anim" style="--d:.35s;font-size:108px" data-page-node-id="ELWloxC5aFQioKIF8hgBpc">Bash 工具的<br data-page-node-id="1UEsCCiLQ0Unu7xhlcR7iy"><span class="hl" data-page-node-id="0EUYDGTQK3crQIiO5begZB">跨平台实现</span></h1>
+  <div class="anim subtitle" style="--d:.6s" data-page-node-id="RxNu0wxNr2vsnaiBbSWeTF">从 <b data-page-node-id="e69b3g8ytwYOSHfK2l6YnA">execFile</b> 统一入口，到 Shell 路径的<b data-page-node-id="NUcdUn17GeJ5Gyb9eQp4Oe">智能定位</b>——一次完整的拆解</div>
+  <div class="anim pop term" style="--d:.95s;margin-top:14px" data-page-node-id="1hLl2AqvFnknabZHICAFSE">
+    <div class="term-bar" data-page-node-id="ynpiaz7uByHmu2v3uwVRdF"><i data-page-node-id="HECdTYqYweGFPUCbOMnNOm"></i><i data-page-node-id="z48qYgtOOMiPxWgYpClk6x"></i><i data-page-node-id="yhiK6mGrcScDHH3en6YBdu"></i><span data-page-node-id="QocQqQrHD4HAs67kBVngoh">bash-tool.ts — Claude Code</span></div>
+    <div class="term-body" data-page-node-id="UP514OW72qvNNtg8CRyTGc">
+<span class="cline" style="--d:1.3s" data-page-node-id="zuaKDlV9irEPQUiZJU5tMI"><span class="c-cm" data-page-node-id="lHL1yoIEDl6F6z04xzo562">// 无论 macOS / Linux / Windows</span></span>
+<span class="cline" style="--d:1.6s" data-page-node-id="WdaxqpUoHeBzT2Pi5uV5H2"><span class="c-cm" data-page-node-id="FMKb16ZA1MF8zmrsP7CSIc">// 所有 Shell 命令统一经由 bash 执行</span></span>
+<span class="cline" style="--d:1.9s" data-page-node-id="mjeYStpOSl73sPJEP8b1gO"><span class="c-kw" data-page-node-id="P19WNZuCGfeIONFBRgTXLf">execFile</span>(<span class="c-fn" data-page-node-id="Pm4tNaGARrPwtPnLhYdECO">bashPath</span>, [<span class="c-str" data-page-node-id="ucBXbwyOldLc9gxKzGO9zW">"-c"</span>, command])<span class="cursor" data-page-node-id="aauSfDkqTN33HXPvxCEcqr"></span></span>
+    </div>
+  </div>
+  <div class="anim fade footer" style="--d:2.3s" data-page-node-id="jFbsEiuDm6jLmCBLUFiIjZ"><span class="brand" data-page-node-id="vSbm2SZR1hTM71n2GPDtvQ">程序员Cobyte</span><span data-page-node-id="1uYZxUgIAMsE6Rage19jgd">Claude Code 源码最小还原实现</span></div>
+</section>
+
+<!-- ============ Slide 2 · 跨平台一致性 ============ -->
+<section class="slide" id="slide2" data-page-node-id="HhPn0mldOKEpZw2HZBfAap">
+  <div class="pager" data-page-node-id="Tia4r5mr18q4hE8mfbiWBt"><b data-page-node-id="71EddveR5zv8rGY7L3k3Bb">02</b> / 06</div>
+  <div class="anim tag" style="--d:.1s" data-page-node-id="d27uNDKwN7lUAJVdww8Y5I">CROSS-PLATFORM CONSISTENCY</div>
+  <h1 class="anim" style="--d:.3s" data-page-node-id="es1zvoeQhuMzsaJfTjyOLX">跨平台一致性：<span class="hl" data-page-node-id="mObj0drhkwnvCDGfGXJ6Tp">统一的执行入口</span></h1>
+  <div class="anim subtitle" style="--d:.55s" data-page-node-id="vFnD8hRthQkxtukhZDJATP">借助 Node.js 的 <b data-page-node-id="puVVvBvvP94P3kGorh86XH">child_process</b> 模块，用 <b data-page-node-id="es9uJRrBIOfetSlO9TwxVz">execFile</b> 直接指定 bash 程序文件，把大模型返回的命令作为参数传入</div>
+  <div class="flow" data-page-node-id="39Ce6VGTkLMqTI92HOmCmz">
+    <div class="anim pop node" style="--d:.85s" data-page-node-id="GigBteCkzDBb7CwEXnHLar">
+      <div class="ico" data-page-node-id="WvcfbXaVgSmvas1sQmrqxg">LLM</div>
+      <div class="t" data-page-node-id="jXlWYRmBC8OI405DxgYONE">大模型输出</div>
+      <div class="d" data-page-node-id="SthMgIgrxdeLrwOTcw5GUN">Shell 命令文本</div>
+    </div>
+    <div class="wire" style="--d:1.15s;--pd:1.4s" data-page-node-id="AMyYOu32CHRlwWWpAr8hjY"><i data-page-node-id="IRcJm1rBGqjTziUh7pUQhF"></i><b data-page-node-id="GxjrTrlzzGqtCdpCJF8koD"></b></div>
+    <div class="anim pop node" style="--d:1.3s" data-page-node-id="Rzir99ADwPDyUteMYO3Ifs">
+      <div class="ico" data-page-node-id="fNqeU71vddonZqtETcd9dZ">execFile</div>
+      <div class="t" data-page-node-id="a15nUBtjYeIVbxQaRKzacv">child_process</div>
+      <div class="d" data-page-node-id="F7Mi9Cl2NVQ8pYNDEjvfkv">Node.js 子进程模块</div>
+    </div>
+    <div class="wire" style="--d:1.6s;--pd:1.85s" data-page-node-id="XsJDdibVP4rtBWxHJ0kHqh"><i data-page-node-id="hJsR5JUisYl30Tsb1ULK5h"></i><b data-page-node-id="28KM55jVXz9AwrfCYvHKXS"></b></div>
+    <div class="anim pop node" style="--d:1.75s" data-page-node-id="XsK1yHa0EHSbd7Xlo6q8W0">
+      <div class="ico" data-page-node-id="ry0cHnvBibgemuhc3TSANB">bash / zsh</div>
+      <div class="t" data-page-node-id="gg3Sg5ekN6Us73FvjZeBkL">统一 Shell 解析</div>
+      <div class="d" data-page-node-id="MVHAPoZTlwvjHuFp00cHib">命令实际执行者</div>
+    </div>
+    <div class="wire" style="--d:2.05s;--pd:2.3s" data-page-node-id="40UbqUztHPA8B9MVYaDEAX"><i data-page-node-id="YHjOxFCClwpBlX2XjgUCh7"></i><b data-page-node-id="YXiLBgOIbpizbnMp7yaEDN"></b></div>
+    <div class="anim pop node" style="--d:2.2s" data-page-node-id="wY9qjBDJXYubodBbiqMPnm">
+      <div class="ico" data-page-node-id="rpRclxHFFZQSNkXlMBDts4">OS</div>
+      <div class="t" data-page-node-id="6ucUg4IVBscZYMsrh7CAzJ">三大桌面平台</div>
+      <div class="d" data-page-node-id="xOb6fjOHZBahPsJ3ZQWb71">macOS · Linux · Windows<br data-page-node-id="N7ulYsHW0abLJUsBx5FKrV">执行行为保持一致</div>
+    </div>
+  </div>
+  <div class="anim callout" style="--d:2.55s" data-page-node-id="DZc5C2GqB8OuWVoIMhu96W">
+    <span class="q" data-page-node-id="HX7TAfo3nIZeJ9CpBH2tt6">难点 ≠ 执行</span>
+    <span class="p" data-page-node-id="dbB5a6y7RC2IGbeWECB1uw">跨平台的关键，在于<b data-page-node-id="jDjG9P4rUO3OCtSTB6Extb">如何在不同操作系统上准确定位 bash 程序文件的路径</b></span>
+  </div>
+  <div class="anim fade footer" style="--d:2.9s" data-page-node-id="mC3AERxXVFtTNhv49Yiu2H"><span class="brand" data-page-node-id="OzyPMGX5tqUaOGbBt9jjHh">程序员Cobyte</span><span data-page-node-id="ZRbMk3ftgkNZFFpUE0fHPV">统一入口 · execFile → bash</span></div>
+</section>
+
+<!-- ============ Slide 3 · Windows 平台 ============ -->
+<section class="slide" id="slide3" style="gap:26px;padding:76px 100px" data-page-node-id="5tXVm7g6W2mUAGmsIwl3ha">
+  <div class="pager" data-page-node-id="iVk4rdqso0s9uzkJTrejBE"><b data-page-node-id="W7Sztba2nr7UBhCQhiDLaT">03</b> / 06</div>
+  <div class="anim tag" style="--d:.05s" data-page-node-id="0uqpElXEjusSliBewAOBNx">WINDOWS · GIT-BASH</div>
+  <h1 class="anim" style="--d:.25s;font-size:64px" data-page-node-id="vQQCsMBrXlypGgcswiZj4j">Windows：Git-Bash 的<span class="hl" data-page-node-id="GZ155r8mEJ01msfuyYWWfO">定位策略</span></h1>
+  <div class="steps" data-page-node-id="BnQHXW3ydQYn2N3veQTUTr">
+    <div class="anim chip step" style="--d:.5s" data-page-node-id="PxPwDoRU6rpTd28dKpXsEN">
+      <div class="no" data-page-node-id="ZAjjdoALPRbbvJ44gCrgEv">01</div>
+      <div data-page-node-id="fUIGGPaD8bGIFe0vTbM0D3"><div class="tt" data-page-node-id="Lkg9MRQf5DJEoD3c8fg7A0">优先读取用户环境变量</div>
+      <div class="dd" data-page-node-id="WU1HJHh2KbeKkARxWeK5xi">若已设置 <code data-page-node-id="9I3zA7mvEfZU0d17dNi0rG">git-bash</code> 程序文件的环境变量，直接将其路径设为系统默认 Shell</div></div>
+    </div>
+    <div class="anim chip step" style="--d:.75s" data-page-node-id="Djb5OdhKr8zvr4D1WRtQLF">
+      <div class="no" data-page-node-id="cqw0HkE4iOWCHuqvveRJpH">02</div>
+      <div data-page-node-id="RWnaRCQt8iKeKj67j9OrDD"><div class="tt" data-page-node-id="q5Obq7tkOyy7yi2SPIS92c">查找 Git 安装路径</div>
+      <div class="dd" data-page-node-id="iWC05kd0xhyl4sJZ1I3vnu">先扫描常见 Git 安装目录找 <code data-page-node-id="jZ2X9uwexZzsyrgh27NAcg">git.exe</code>；未找到再调用系统命令 <code data-page-node-id="Oa5MBwTJOWimYM3LDC97X4">where.exe</code> 进一步搜索</div></div>
+    </div>
+    <div class="anim chip step" style="--d:1s" data-page-node-id="iqYQ6qGAN4LqbDAwBV8uU6">
+      <div class="no" data-page-node-id="evimJZWhmH3nFWRLOt2gGi">03</div>
+      <div data-page-node-id="ljafkxrC7KRbydiHSzf95A"><div class="tt" data-page-node-id="ypXjmP0ZzGYP6JCmTBtVsq">反推 Git-Bash 路径</div>
+      <div class="dd" data-page-node-id="3E2kNjwHroV94FvVFlCeJs">Git-Bash 在 Git 安装目录中的相对路径固定（<code data-page-node-id="2f8hlLG0qqBK7k3W1rny9P">bin\bash.exe</code>），定位到 Git 根目录即可反推完整路径</div></div>
+    </div>
+    <div class="anim chip step" style="--d:1.25s" data-page-node-id="oZZVHhhaI2ZQmnDjUpqdbO">
+      <div class="no" data-page-node-id="HC04YJEADPsxNWHbuohSHt">04</div>
+      <div data-page-node-id="DOnzdkjpuajciophhkpkue"><div class="tt" data-page-node-id="ftPWgAv3KB7fckEecCV8Ij">兜底处理</div>
+      <div class="dd" data-page-node-id="XhVoVCGhjUioxFbKDng7qR">以上步骤均失败 → 报错，提示用户安装 Git-Bash</div></div>
+    </div>
+  </div>
+  <div class="anim note" style="--d:1.55s" data-page-node-id="Bo2xNLNTPmG5kpL56DZmOU">
+    <span class="badge" data-page-node-id="JMhDDCC87LNuJhb7LCgJin">NEW</span>
+    <span data-page-node-id="oqLhkJoyw79FA5cyDaar5p">最新版 Claude Code：找不到 Git-Bash 时改用 <b data-page-node-id="sKBzKSjXzgrFoCFWVaB1yR">PowerShell</b> 执行命令，Windows 兼容性进一步提升</span>
+  </div>
+  <div class="anim fade footer" style="--d:1.85s" data-page-node-id="gtBvHw7Yue2OyNOUA7YMFE"><span class="brand" data-page-node-id="acCP1nMBXFc0eysU4HDCeb">程序员Cobyte</span><span data-page-node-id="0qHHDc1qdKpP6Ec2MjeeEn">环境变量 → 扫描 → 反推 → 兜底</span></div>
+</section>
+
+<!-- ============ Slide 4 · 类 Unix 平台 ============ -->
+<section class="slide" id="slide4" data-page-node-id="YtkEKGNJ0sAzG4bDGnS6zP">
+  <div class="pager" data-page-node-id="RuloMxOYl7buAb1hbmztQ8"><b data-page-node-id="sCJ1THHNV3fid5FdFleJ90">04</b> / 06</div>
+  <div class="anim tag" style="--d:.1s" data-page-node-id="m561SiwXtKy3gHhSjdq4b7">LINUX / MACOS · USER CONFIG</div>
+  <h1 class="anim" style="--d:.3s" data-page-node-id="VJNP7ZY5exx6odNapFnu4K">类 Unix 平台<span class="hl" data-page-node-id="dUk5HTjKriINRb8FwSjYK7">与用户自定义</span></h1>
+  <div class="cols" data-page-node-id="Nm2CXSRMFvHgj2EryGAfLw">
+    <div class="col-l" data-page-node-id="CAIwqDTvnZbLUiyJKQSIVn">
+      <div class="anim pop term" style="--d:.6s;flex:1;display:flex;flex-direction:column" data-page-node-id="tHeAUhe2N09WnIPu8PBsDi">
+        <div class="term-bar" data-page-node-id="ke4mGZ5h4dF2FB9bvonczp"><i data-page-node-id="7UP0EhEy0ETs23Uz6REezG"></i><i data-page-node-id="1SCizqwL26Mx8EABDk93xc"></i><i data-page-node-id="kqPKVHWLM0j73ivmwbP2cE"></i><span data-page-node-id="aWp11abtV9v6eQGT55nuip">zsh — macOS / Linux</span></div>
+        <div class="term-body" style="flex:1" data-page-node-id="aeLs7d4AEIIkNfjX2Mu9NK">
+<span class="cline" style="--d:.9s" data-page-node-id="7LR7Ctux0aV4b5dMY3ZjHq"><span class="c-kw" data-page-node-id="91sTV5bk0YBDgzFIH5CoW0">$</span> echo $SHELL</span>
+<span class="cline c-out1" style="--d:1.15s" data-page-node-id="QfVKbAozwI3oYMzpPldUJt">/bin/zsh</span>
+<span class="cline" style="--d:1.45s" data-page-node-id="wg6Ky5tIRljYZ71KUiCpWv"><span class="c-kw" data-page-node-id="YXJsdk7JhtYuIDHropDmyT">$</span> which bash</span>
+<span class="cline c-out2" style="--d:1.7s" data-page-node-id="HMIdC6LS8vegTJ0ipwHphG">/usr/bin/bash</span>
+<span class="cline" style="--d:2s" data-page-node-id="VNTSXJRxQ4ETo6OFjA6p5B"><span class="c-kw" data-page-node-id="JA66GgqQqQNaT36JdFcOZ7">$</span> which zsh</span>
+<span class="cline" style="--d:2.25s" data-page-node-id="tbwFg2ipjEIJ9VEsEsHv1s">/bin/zsh</span>
+<span class="cline" style="--d:2.55s" data-page-node-id="ruXBUewHcF2DKJx1N55uRa"> </span>
+<span class="cline c-cm" style="--d:2.8s" data-page-node-id="xqpUSWsaE2xXCSl8ZGJLQS"># $SHELL 决定默认解析器</span>
+<span class="cline c-cm" style="--d:3.05s" data-page-node-id="B5RNaz1cvtK0xqFXifXH2g"># 用户可显式指定，优先级最高<span class="cursor" data-page-node-id="31v4dR5rjxQ1uedS3uM0Uo"></span></span>
+        </div>
+      </div>
+    </div>
+    <div class="col-r" style="justify-content:center" data-page-node-id="txwURCYLHGRtaNQsH9YOe6">
+      <div class="anim mini-card" style="--d:.85s" data-page-node-id="FaUxf6bI8bASLdaLwxBH85">
+        <div class="mt" data-page-node-id="YBhVCFMAIZlGFk5UVEGyGG"><span class="dot" data-page-node-id="fpj84ybO3uQNVGeqgt8j70"></span>系统默认查找</div>
+        <div class="md" data-page-node-id="ll6EdHixVVdd1UAGfaGPPO">先读取系统默认 Shell 环境变量（如 <code data-page-node-id="G2mtytuWf0Nw8Riuk18f0p">SHELL</code>），再通过 <code data-page-node-id="aHY5hCtJymjAzPQ8mSr4x0">which</code> 命令查找 <b data-page-node-id="ZNGZ7akMXbudb7drSRhkKy">bash</b> 或 <b data-page-node-id="oNnsWI8kvyu3NRL0eSEQqF">zsh</b> 的程序文件路径</div>
+      </div>
+      <div class="anim hot mini-card" style="--d:1.15s" data-page-node-id="9F6NhccyWCK3XG2uHfS61X">
+        <div class="mt" data-page-node-id="E8hdCR2MJaKM7LYkyqJwJt"><span class="dot" data-page-node-id="eUhiLmOZqMHIsfuKkOdIjd"></span>用户自定义<span class="prio" data-page-node-id="k5XBbdfm4lDndR2rFexDC1">最高优先级</span></div>
+        <div class="md" data-page-node-id="NgLKvhLZN6PbFgHzeOHnU7">允许通过环境变量<b data-page-node-id="LwCn8BJfkTzqj77Jo6BHag">手动指定 Shell 解析器</b>，设置拥有最高优先级——但仅限 <code data-page-node-id="fDFHHE1so8KYbg8kWGYLMz">bash</code> / <code data-page-node-id="yV3frmzLi8FKWC6q22oBZe">zsh</code> 两种合法解析器</div>
+      </div>
+    </div>
+  </div>
+  <div class="anim fade footer" style="--d:2.6s" data-page-node-id="fBlVPEtl4OgAytanX1mmcD"><span class="brand" data-page-node-id="aQuIFRh4s6qoGuprn07smq">程序员Cobyte</span><span data-page-node-id="vxmcjsatsoxMsi1gdM811Z">$SHELL + which · 用户指定优先</span></div>
+</section>
+
+<!-- ============ Slide 5 · 多重兜底机制 ============ -->
+<section class="slide" id="slide5" data-page-node-id="tHWH1BJKkKtB1DmV7f3obf">
+  <div class="pager" data-page-node-id="2tDJlmJI3CqwIvbnqBkQCr"><b data-page-node-id="yoBbMNGE0mNIp52cPF75AU">05</b> / 06</div>
+  <div class="anim tag" style="--d:.1s" data-page-node-id="pG8UKCbUUr1aZHatn2EEp5">FALLBACK MECHANISM</div>
+  <h1 class="anim" style="--d:.3s" data-page-node-id="FokqDkY8shs8CcSXKcaKPQ">多重<span class="hl" data-page-node-id="xM5hOxp4xUi7nSbPcNkqRg">兜底机制</span></h1>
+  <div class="cols" data-page-node-id="LejFz9EjuEe6FDAfHoVcat">
+    <div class="col-l" style="gap:20px" data-page-node-id="Z45rEYdL53lSIWR6DAzmXm">
+      <div class="anim chip step" style="--d:.55s;padding:22px 30px" data-page-node-id="yTFWwG6V5LGeBwPyKaDzkN">
+        <div class="no" style="width:54px;height:54px;font-size:24px" data-page-node-id="7PCoruuKFPfgg3Qg4EhN35">P0</div>
+        <div data-page-node-id="YADLVqQGWvGMygymYBJ2aN"><div class="tt" style="font-size:26px" data-page-node-id="RvEpAEcBrhR5juQsRwWKRx">用户显式指定</div>
+        <div class="dd" style="font-size:20px" data-page-node-id="cLgtvfIOKZsusPhm5q3bDi">指定了合法的 bash / zsh 解析器 → 直接使用</div></div>
+      </div>
+      <div class="anim chip step" style="--d:.8s;padding:22px 30px" data-page-node-id="nF5BuNvZkoqoJiGn4VAOed">
+        <div class="no" style="width:54px;height:54px;font-size:24px" data-page-node-id="z83uT5zQvmgCIic7ltBRWe">P1</div>
+        <div data-page-node-id="Laqvl6DS3t5c8uQB2IdqvV"><div class="tt" style="font-size:26px" data-page-node-id="jM6hx4NVJYneHhQqvxh6yY">读取系统默认 Shell</div>
+        <div class="dd" style="font-size:20px" data-page-node-id="UGRynpHfZKZAWdcETInzfz">指向 bash → bash 路径提到兜底数组最前；指向 zsh → zsh 路径提前</div></div>
+      </div>
+      <div class="anim chip step" style="--d:1.05s;padding:22px 30px" data-page-node-id="4LGDDjEnq6qjMicjCrD99X">
+        <div class="no" style="width:54px;height:54px;font-size:24px" data-page-node-id="sFHxdq4g84NNnBocXu02le">P2</div>
+        <div data-page-node-id="5usX8Itcn8xoOziJuX6Trd"><div class="tt" style="font-size:26px" data-page-node-id="UtK0yG2aDyOHMi7ms6ehQf">选用兜底数组</div>
+        <div class="dd" style="font-size:20px" data-page-node-id="FzKJuCLC0nbqVCZmMSMV2e">直接取数组中第一个可用路径</div></div>
+      </div>
+      <div class="anim chip step" style="--d:1.3s;padding:22px 30px" data-page-node-id="dGKOshJdn40tlOSpdyWbyi">
+        <div class="no" style="width:54px;height:54px;font-size:24px" data-page-node-id="tFDv5gbHtlb3yCaK2WEzWD">P3</div>
+        <div data-page-node-id="HPJs2ww2mrhuSpTxQjIGQZ"><div class="tt" style="font-size:26px" data-page-node-id="aJOrjXkWoTlFoDnJgBz82R">全部落空</div>
+        <div class="dd" style="font-size:20px" data-page-node-id="EdnmvI1fkllY66isMkzPpS">仍无可用路径 → 报错退出</div></div>
+      </div>
+    </div>
+    <div class="col-r" data-page-node-id="LPNjLJH0hyIVCfq8n7LpA9">
+      <div class="anim pop term" style="--d:.7s;flex:1;display:flex;flex-direction:column" data-page-node-id="WTqSxxmqCGGiChH3qUowEI">
+        <div class="term-bar" data-page-node-id="WkdGAA2R9lTJh6Zn6sYK7Z"><i data-page-node-id="mDijGdVZBKawcPNzG4HUjo"></i><i data-page-node-id="T0TzRLAqcHiwzKUm0odHCy"></i><i data-page-node-id="Aet4OhhuUuWL2IuNJEQKHc"></i><span data-page-node-id="OmsuVoD3X4SxVddBkb7U8r">fallback-paths.ts</span></div>
+        <div class="term-body" style="flex:1;font-size:22px" data-page-node-id="bstud9q4WA3GGByRuAkpL9">
+<span class="cline" style="--d:1s" data-page-node-id="Te5vsdacRgtrITHGI1elAj"><span class="c-cm" data-page-node-id="Rxbs2ghxoBWHgwNWpeMKNG">// 预置常见安装目录兜底数组</span></span>
+<span class="cline" style="--d:1.2s" data-page-node-id="GEOM8e8MDL7AFBWEigd5pG"><span class="c-kw" data-page-node-id="4o9iZbmHe2YoRZD4c4EEeq">const</span> FALLBACK = [</span>
+<span class="cline" style="--d:1.4s" data-page-node-id="bkJ5E3kvz38xdvVmmb5jYy">  <span class="c-str" data-page-node-id="ONQpCHnocYXSnC8KibumLX">"/bin/bash"</span>, <span class="c-str" data-page-node-id="WZ16nyVGDht7506XYWbDcB">"/usr/bin/bash"</span>,</span>
+<span class="cline" style="--d:1.6s" data-page-node-id="SYP4fcPM2OGdAC0k4jExc3">  <span class="c-str" data-page-node-id="ef9PafORZp96xWq47gGXP2">"/bin/zsh"</span>,  <span class="c-str" data-page-node-id="bZSGR3wGB8l42GAhzzoKLi">"/usr/bin/zsh"</span>,</span>
+<span class="cline" style="--d:1.8s" data-page-node-id="2CTYEa5PexdPUWgkAGTStD">  <span class="c-cm" data-page-node-id="2xw9eCt67TEiscLkZ0XcbH">// ...更多常见路径</span></span>
+<span class="cline" style="--d:2s" data-page-node-id="4pkKfDWIOtyo9PzVdW9Jdd">];</span>
+<span class="cline hl" style="--d:2.25s" data-page-node-id="uaL809D1oydj1u5EBKtuB3"><span class="c-cm" data-page-node-id="Mn9cCDfEHGa2w83vOdksDQ">// $SHELL 命中的解析器排到最前</span></span>
+<span class="cline" style="--d:2.45s" data-page-node-id="pB7ccwD5ENG491ar3gTJDl"><span class="c-fn" data-page-node-id="wx2pU8wa5dETNQp5aGLSIC">pickFirst</span>(FALLBACK)<span class="cursor" data-page-node-id="cfYsIrj7sZ5i0OlFGMGFB7"></span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="anim fade footer" style="--d:2.75s" data-page-node-id="ZKrvmv3AmHBdBj75ZaWc0y"><span class="brand" data-page-node-id="93fWqEU2lRmZBEjBcQA7s5">程序员Cobyte</span><span data-page-node-id="pHflbnYp30p6yvMAajsXsd">预置路径库 · 优先级选择</span></div>
+</section>
+
+<!-- ============ Slide 6 · 总结 ============ -->
+<section class="slide" id="slide6" data-page-node-id="mTFs2OkFGNACPEZFAxDH2Z">
+  <div class="pager" data-page-node-id="yGu1e5QuhT2TxWLcIHI2Cv"><b data-page-node-id="nyAyuxZRBcryXpdrGMVJVm">06</b> / 06</div>
+  <div class="anim tag" style="--d:.1s" data-page-node-id="rnULrrOXrZGEG6w7oNVuEY">SUMMARY</div>
+  <h1 class="anim" style="--d:.3s" data-page-node-id="JFFLt9eVK1cjIkeDQfkw7R">总结：<span class="hl" data-page-node-id="e2UBjwxOv2kHvHbw5cM2Dj">两条设计主线</span></h1>
+  <div class="sum-cards" data-page-node-id="lkGcChSmHvmrGsa9C6Svda">
+    <div class="anim pop sum-card" style="--d:.6s" data-page-node-id="IyOjDFQBKo593DOL3QF2Qz">
+      <div class="no" data-page-node-id="W4ByzrdHpY01OwcwAbqvIr">LINE 01</div>
+      <div class="t" data-page-node-id="pEaHx7S6J1mddrHToJeVyh">统一的执行入口</div>
+      <div class="d" data-page-node-id="5uvEKmgKw970eINyVuzLJt">无论底层平台如何，都通过 <code data-page-node-id="cZYbG2DDRNCDd4owfM1hDv">child_process.execFile</code> 调用系统自带的 <b data-page-node-id="QW2fxtB6HYdFpFuGZ9fjM7">bash / zsh</b> 运行命令，<b data-page-node-id="uRZccxviax4Vx1QRxJnP5N">保证执行行为的一致性</b></div>
+      <div class="no" style="margin-top:auto;opacity:.75" data-page-node-id="sLxPVF6IK0sgpy5YeFA50z">execFile → bash -c &lt;command&gt;</div>
+    </div>
+    <div class="anim pop sum-card" style="--d:.85s" data-page-node-id="0x7ia35tHGrFSE5qXj6TNl">
+      <div class="no" data-page-node-id="RJaO6F5BczSoMZx2H4cMvY">LINE 02</div>
+      <div class="t" data-page-node-id="9SthxDWZ8MAipzmZzoIyP9">智能的跨平台Shell路径定位</div>
+      <div class="d" data-page-node-id="StnQ9FP8CRg4UejLAGn2jS">Windows 依赖 <b data-page-node-id="wYSXymiwLvtqKIOrvdDY4G">Git-Bash</b> 并配合多种查找策略；Unix-like 借助 <b data-page-node-id="bfLYEAUBMfyEToEKOYWNbN">$SHELL + which</b>；再辅以<b data-page-node-id="2wcxM7NvE3Bp9eqmKA4pCm">用户自定义</b>与<b data-page-node-id="9X4R88cpIONvEr0KVaa6Ld">预置路径兜底</b>，覆盖各种运行环境</div>
+      <div class="no" style="margin-top:auto;opacity:.75" data-page-node-id="wCddJ4Yi9ySd8QYGpJexk0">Git-Bash · $SHELL · which · fallback[]</div>
+    </div>
+  </div>
+  <div class="anim bye" style="--d:1.2s" data-page-node-id="QOVXRotrLHb1nN02juZGVg">
+    <span class="big" data-page-node-id="fHQjiK2IBr6VPYZhLoFL6e">下期再见<span span data-page-node-id="MwumnbGxywacffdoBlrd1z">，</span>我是<span data-page-node-id="QDjE7LH3dJZacJThozSptj">程序员Cobyte</span></span>
+    <span class="sm" data-page-node-id="ybSWbwW1Dvg79IziI2XqVP">—— 周密的容错设计，让 LLM 的命令可靠落地</span>
+  </div>
+  <div class="anim fade footer" style="--d:1.5s" data-page-node-id="gBd2VflZ6YMYqJtZa2JEjq"><span class="brand" data-page-node-id="fofA8FE4olJMPpNf1vjA9a">程序员Cobyte</span><span data-page-node-id="FEVGD1eNATyX8Jb1YVKYIh">Claude Code 源码最小还原实现</span></div>
+</section>
+
+</div>
+<script>
+var slides=[].slice.call(document.querySelectorAll('.slide'));
+var cur=0;
+function play(i){
+  slides[cur].classList.remove('active','play');
+  cur=((i%slides.length)+slides.length)%slides.length;
+  var s=slides[cur];
+  s.classList.add('active');
+  void s.offsetWidth;
+  s.classList.add('play');
+}
+document.getElementById('stage').addEventListener('click',function(){play(cur+1)});
+window.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter')play(cur+1);
+  else if(e.key==='ArrowLeft')play(cur-1);
+  else if(e.key==='r'||e.key==='R')play(cur);
+});
+function fit(){
+  var k=Math.min(window.innerWidth/1920,window.innerHeight/1080);
+  document.getElementById('stage').style.transform='translate(-50%,-50%) scale('+k+')';
+}
+window.addEventListener('resize',fit);
+fit();
+var qp=new URLSearchParams(location.search).get('page');
+play(qp?parseInt(qp,10)-1:0);
+</script>
+</body>
+</html>

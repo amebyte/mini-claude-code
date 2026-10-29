@@ -1,0 +1,19 @@
+{
+  "name": "claude-code-m01",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code 源码最小还原实现 · T0.1 项目骨架（--version / --help）",
+  "scripts": {
+    "dev": "tsx src/entrypoints/cli.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "commander": "^15.0.0"
+  }
+}

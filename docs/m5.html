@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>实现 Claude Code 的 Agent Loop · Mini Claude Code 手搓系列</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#1B1410; --card:#261B14; --card-line:#3D2B1F;
+    --orange:#D97757; --cream:#F5EDE4; --muted:#A89888;
+    --bar-dark:#2A1D15; --bar-line:#4A3527;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:'Noto Sans SC',sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ===== 舞台：1920×1080 等比缩放 ===== */
+  #stage{width:1920px;height:1080px;position:relative;flex:none;
+    background:var(--bg);overflow:hidden;
+    transform-origin:center center;cursor:pointer;}
+
+  .slide{position:absolute;inset:0;padding:100px;display:none;
+    flex-direction:column;gap:36px;}
+  .slide.active{display:flex;}
+
+  /* ===== 通用元素 ===== */
+  .header{display:flex;justify-content:space-between;align-items:center;}
+  .tag{font-size:28px;font-weight:500;color:var(--orange);letter-spacing:2px;}
+  .indicator{font-size:28px;color:var(--muted);}
+  h1{font-size:72px;font-weight:700;color:var(--cream);line-height:1.2;}
+  .subtitle{font-size:30px;color:var(--muted);}
+
+  .slide .anim{opacity:0;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(28px);}to{opacity:1;transform:none;}}
+  @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+  @keyframes fadeOut{to{opacity:0;}}
+  @keyframes popIn{0%{opacity:0;transform:scale(.85);}60%{opacity:1;transform:scale(1.03);}100%{opacity:1;transform:scale(1);}}
+  @keyframes drawX{from{transform:scaleX(0);}to{transform:scaleX(1);}}
+  @keyframes drawY{from{transform:scaleY(0);}to{transform:scaleY(1);}}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+  @keyframes warnPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.18);}}
+  @keyframes streamGlow{0%,100%{box-shadow:0 0 6px 1px rgba(217,119,87,.25);}50%{box-shadow:0 0 18px 5px rgba(217,119,87,.65);}}
+  @keyframes chipOn{
+    0%{opacity:0;transform:translateX(24px);}
+    50%{opacity:1;border-color:var(--orange);box-shadow:0 0 24px rgba(217,119,87,.35);}
+    100%{opacity:1;transform:none;}
+  }
+  @keyframes glowFinal{
+    0%{box-shadow:0 0 0 0 rgba(217,119,87,0);}
+    40%{box-shadow:0 0 40px 4px rgba(217,119,87,.5);border-color:var(--orange);}
+    100%{box-shadow:0 0 20px 2px rgba(217,119,87,.25);border-color:var(--orange);}
+  }
+
+  .slide.play .d0{animation:fadeUp .6s ease .1s forwards;}
+  .slide.play .d1{animation:fadeUp .6s ease .35s forwards;}
+  .slide.play .d2{animation:fadeUp .6s ease .6s forwards;}
+
+  /* 警示条（通用） */
+  .callout{display:flex;align-items:center;gap:20px;padding:32px;
+    background:#231712;border:2px solid var(--orange);border-radius:16px;opacity:0;}
+  .callout p{font-size:30px;font-weight:500;color:var(--cream);}
+  .warn{flex:none;width:36px;height:36px;}
+  .footnote{font-size:28px;color:var(--muted);text-align:center;}
+
+  /* 终端窗口（通用） */
+  .term{background:#211710;border:1.5px solid var(--card-line);
+    border-radius:16px;overflow:hidden;display:flex;flex-direction:column;}
+  .term-bar{display:flex;align-items:center;gap:8px;padding:14px 20px;
+    background:#1A120C;border-bottom:1px solid var(--card-line);}
+  .tdot{width:12px;height:12px;border-radius:50%;background:var(--card-line);}
+  .term-file{margin-left:12px;font-size:18px;color:var(--muted);}
+  .term-body{padding:20px 26px;font-size:19px;line-height:1.6;}
+  .cline{display:block;opacity:0;white-space:pre;color:var(--cream);}
+  .cline .cm{color:var(--muted);}
+  .cline .st{color:#E0977B;}
+  .cline .kw{color:var(--orange);}
+  .cline.hl{background:rgba(217,119,87,.16);border-left:3px solid var(--orange);
+    padding-left:12px;margin-left:-15px;}
+  .cursor{color:var(--orange);animation:blink 1s step-end infinite;}
+
+  /* ========== SLIDE 0 封面 ========== */
+  #slide0{gap:24px;}
+  .eyebrow{font-size:42px;font-weight:700;color:var(--orange);letter-spacing:1px;}
+  #slide0 h1{font-size:100px;}
+  .hero{flex:1;display:flex;gap:48px;min-height:0;align-items:stretch;}
+  .build{flex:1;display:flex;flex-direction:column;justify-content:center;gap:24px;min-width:0;}
+  .build-label{font-size:24px;color:var(--orange);letter-spacing:2px;opacity:0;}
+  .bitem{display:flex;align-items:center;gap:18px;opacity:0;}
+  .bbox{width:30px;height:30px;border:2px solid var(--orange);border-radius:8px;flex:none;
+    display:flex;align-items:center;justify-content:center;color:var(--orange);
+    font-size:20px;font-weight:700;}
+  .bitem .t{font-size:30px;font-weight:500;color:var(--cream);}
+  #slide0.play .build-label{animation:fadeIn .4s ease .9s forwards;}
+  #slide0.play .bi1{animation:fadeUp .45s ease 1.2s forwards;}
+  #slide0.play .bi2{animation:fadeUp .45s ease 1.5s forwards;}
+  #slide0.play .bi3{animation:fadeUp .45s ease 1.8s forwards;}
+
+  #slide0 .term{width:920px;flex:none;opacity:0;}
+  #slide0.play .term{animation:fadeUp .6s ease .8s forwards;}
+  #slide0.play .t1{animation:fadeIn .3s ease 1.2s forwards;}
+  #slide0.play .t2{animation:fadeIn .3s ease 1.4s forwards;}
+  #slide0.play .t3{animation:fadeIn .3s ease 1.6s forwards;}
+  #slide0.play .t4{animation:fadeIn .3s ease 1.8s forwards;}
+  #slide0.play .t5{animation:fadeIn .3s ease 2.0s forwards;}
+  #slide0.play .t6{animation:fadeIn .3s ease 2.2s forwards;}
+  #slide0.play .t7{animation:fadeIn .3s ease 2.4s forwards;}
+  .term-out{margin:4px 26px 22px;border-top:1px dashed var(--bar-line);
+    padding-top:14px;font-size:19px;line-height:1.7;}
+  .oline{display:block;opacity:0;white-space:pre;}
+  .oline .pr{color:var(--muted);}
+  .o1{color:rgba(245,237,228,.35);}
+  .o2{color:rgba(245,237,228,.65);}
+  .o3{color:var(--cream);}
+  #slide0.play .o1{animation:fadeIn .3s ease 3.2s forwards;}
+  #slide0.play .o2{animation:fadeIn .3s ease 3.9s forwards;}
+  #slide0.play .o3{animation:fadeIn .3s ease 4.6s forwards;}
+
+  .trio{display:flex;gap:28px;}
+  .pcard{flex:1;background:var(--card);border:1.5px solid var(--card-line);border-radius:16px;
+    padding:22px 28px;display:flex;flex-direction:column;gap:8px;align-items:center;
+    text-align:center;opacity:0;position:relative;}
+  .pcard .pn{font-size:28px;font-weight:700;color:var(--cream);}
+  .pcard .pd{font-size:22px;color:var(--muted);}
+  .pcard.done .pn{color:var(--muted);}
+  .pcard.here{border:2px solid var(--orange);background:#2A1B12;}
+  .badge{position:absolute;top:-15px;right:18px;background:var(--orange);color:#1B1410;
+    font-size:19px;font-weight:700;border-radius:999px;padding:4px 14px;}
+  #slide0.play .pc1{animation:fadeUp .5s ease 5.4s forwards;}
+  #slide0.play .pc2{animation:fadeUp .5s ease 5.7s forwards;}
+  #slide0.play .pc3{animation:fadeUp .5s ease 6.0s forwards,glowFinal 1s ease 6.8s forwards;}
+
+  /* ========== SLIDE 1 走到哪了（Before/After） ========== */
+  .ba{flex:1;display:flex;gap:48px;min-height:0;align-items:stretch;}
+  .bacard{flex:1;background:var(--card);border:1.5px solid var(--card-line);border-radius:20px;
+    padding:32px 36px;display:flex;flex-direction:column;gap:22px;opacity:0;}
+  .bacard.next{border:2px solid var(--orange);background:#2A1B12;}
+  #slide1.play .bacard.done{animation:fadeUp .5s ease .9s forwards;}
+  #slide1.play .ba-arrow{animation:fadeUp .5s ease 1.4s forwards;}
+  #slide1.play .bacard.next{animation:fadeUp .5s ease 1.7s forwards,glowFinal 1s ease 2.6s forwards;}
+  .ba-head{display:flex;align-items:center;gap:16px;}
+  .ba-name{font-size:36px;font-weight:700;color:var(--cream);}
+  .ba-badge{font-size:20px;font-weight:700;border-radius:999px;padding:4px 14px;}
+  .done .ba-badge{border:1.5px solid var(--muted);color:var(--muted);}
+  .next .ba-badge{background:var(--orange);color:#1B1410;}
+  .ba-item{display:flex;align-items:center;gap:18px;opacity:0;}
+  .ba-item .t{font-size:30px;font-weight:500;color:var(--cream);}
+  .ba-item .s{font-size:22px;color:var(--muted);}
+  .ba-col{display:flex;flex-direction:column;gap:4px;}
+  #slide1.play .done .i1{animation:fadeUp .45s ease 1.1s forwards;}
+  #slide1.play .done .i2{animation:fadeUp .45s ease 1.3s forwards;}
+  #slide1.play .next .i1{animation:fadeUp .45s ease 1.9s forwards;}
+  #slide1.play .next .i2{animation:fadeUp .45s ease 2.1s forwards;}
+  .ba-arrow{width:120px;flex:none;display:flex;align-items:center;justify-content:center;
+    font-size:64px;color:var(--orange);opacity:0;}
+  #slide1.play .callout{animation:fadeUp .7s ease 3.2s forwards;}
+  #slide1.play .warn{animation:warnPulse 1s ease 3.4s 3;}
+
+  /* ========== SLIDE 2 为什么需要（KeyStatement） ========== */
+  .stmt{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:44px;}
+  .big-stmt{font-size:56px;font-weight:700;color:var(--cream);text-align:center;line-height:1.5;opacity:0;}
+  .big-stmt .hl-o{color:var(--orange);}
+  #slide2.play .big-stmt{animation:fadeUp .7s ease .9s forwards;}
+  #slide2 .term{width:1100px;opacity:0;}
+  #slide2.play .term{animation:fadeUp .6s ease 1.8s forwards;}
+  #slide2.play .q1{animation:fadeIn .3s ease 2.4s forwards;}
+  #slide2.play .q2{animation:fadeIn .3s ease 3.4s forwards;}
+  #slide2.play .q3{animation:fadeIn .3s ease 3.7s forwards;}
+  #slide2.play .q4{animation:fadeIn .3s ease 4.4s forwards;}
+  #slide2.play .callout{animation:fadeUp .7s ease 5.4s forwards;}
+  #slide2.play .warn{animation:warnPulse 1s ease 5.6s 3;}
+
+  /* ========== SLIDE 3 工具说明书（Concept+Visual） ========== */
+  .fc{flex:1;display:flex;gap:56px;min-height:0;align-items:stretch;}
+  .fc-left{flex:1;display:flex;flex-direction:column;justify-content:center;gap:16px;min-width:0;}
+  .fc-label{font-size:22px;color:var(--orange);letter-spacing:2px;opacity:0;margin-bottom:6px;}
+  #slide3.play .fc-label{animation:fadeIn .4s ease .9s forwards;}
+  .spec{background:var(--card);border:1.5px solid var(--card-line);border-radius:12px;
+    padding:18px 24px;display:flex;align-items:center;gap:18px;opacity:0;}
+  .spec .sn{font-size:26px;font-weight:700;color:var(--orange);width:185px;flex:none;}
+  .spec .sd{font-size:24px;color:var(--cream);}
+  .spec .ss{font-size:20px;color:var(--muted);}
+  #slide3.play .sp1{animation:chipOn .5s ease 1.2s forwards;}
+  #slide3.play .sp2{animation:chipOn .5s ease 1.7s forwards;}
+  #slide3.play .sp3{animation:chipOn .5s ease 2.2s forwards;}
+  #slide3 .term{width:760px;flex:none;opacity:0;justify-content:center;}
+  #slide3.play .term{animation:fadeUp .6s ease 1.0s forwards;}
+  #slide3.play .j1{animation:fadeIn .3s ease 1.5s forwards;}
+  #slide3.play .j2{animation:fadeIn .3s ease 1.7s forwards;}
+  #slide3.play .j3{animation:fadeIn .3s ease 1.9s forwards;}
+  #slide3.play .j4{animation:fadeIn .3s ease 2.1s forwards;}
+  #slide3.play .j5{animation:fadeIn .3s ease 2.3s forwards;}
+  #slide3.play .j6{animation:fadeIn .3s ease 2.5s forwards;}
+  #slide3.play .j7{animation:fadeIn .3s ease 2.7s forwards;}
+  #slide3.play .callout{animation:fadeUp .7s ease 3.4s forwards;}
+  #slide3.play .warn{animation:warnPulse 1s ease 3.6s 3;}
+
+  /* ========== SLIDE 4 四步流程（Process） ========== */
+  #slide4{gap:24px;padding:72px 100px;}
+  #slide4 h1{font-size:64px;}
+  #slide4 .callout{padding:14px 28px;gap:16px;}
+  #slide4 .callout p{font-size:26px;}
+  #slide4 .callout .warn{width:28px;height:28px;}
+  .layout4{flex:1;display:flex;gap:56px;align-items:stretch;min-height:0;}
+  .step-col{width:600px;flex:none;display:flex;flex-direction:column;justify-content:center;
+    gap:14px;position:relative;padding-left:40px;}
+  .rail{position:absolute;left:10px;top:56px;bottom:24px;width:2px;background:var(--card-line);}
+  .rail-fill{position:absolute;left:0;top:0;width:100%;height:100%;background:var(--orange);
+    transform:scaleY(0);transform-origin:top;}
+  #slide4.play .rail-fill{animation:drawY 5.4s linear 1.0s forwards;}
+  .col-label{font-size:22px;color:var(--orange);letter-spacing:2px;opacity:0;}
+  #slide4.play .fc4label{animation:fadeIn .4s ease .8s forwards;}
+  #slide4.play .msglabel{animation:fadeIn .4s ease .9s forwards;}
+  .chip{background:var(--card);border:1.5px solid var(--card-line);border-radius:12px;
+    padding:12px 20px;display:flex;align-items:center;gap:16px;opacity:0;flex:none;}
+  .chip .idx{font-size:24px;color:var(--orange);width:32px;flex:none;font-weight:700;}
+  .chip .nm{font-size:24px;font-weight:700;color:var(--cream);}
+  .chip .ds{font-size:19px;color:var(--muted);}
+  #slide4.play .s1{animation:chipOn .5s ease 1.0s forwards;}
+  #slide4.play .s2{animation:chipOn .5s ease 2.2s forwards;}
+  #slide4.play .s3{animation:chipOn .5s ease 3.6s forwards;}
+  #slide4.play .s4{animation:chipOn .5s ease 5.2s forwards;}
+
+  .msg-col{flex:1;display:flex;align-items:center;justify-content:center;min-width:0;}
+  .msg-panel{width:100%;background:#211710;border:1.5px solid var(--card-line);
+    border-radius:16px;padding:26px 30px;display:flex;flex-direction:column;gap:22px;opacity:0;}
+  #slide4.play .msg-panel{animation:fadeUp .5s ease .9s forwards;}
+  .msg-head{display:flex;justify-content:space-between;align-items:center;
+    font-size:20px;color:var(--muted);letter-spacing:2px;}
+  .mrow{display:flex;align-items:center;gap:14px;opacity:0;}
+  .mnode{width:120px;flex:none;text-align:center;font-size:20px;font-weight:700;
+    color:var(--cream);background:var(--card);border:1.5px solid var(--card-line);
+    border-radius:10px;padding:10px 0;}
+  .mnode.me{border-color:var(--orange);color:var(--orange);}
+  .mtrack{flex:1;height:3px;background:var(--card-line);position:relative;border-radius:2px;}
+  .mfill{position:absolute;inset:0;background:var(--orange);border-radius:2px;transform:scaleX(0);}
+  .fwd .mfill{transform-origin:left;}
+  .rev .mfill{transform-origin:right;}
+  .mpkt{position:absolute;top:50%;width:12px;height:12px;margin-top:-6px;border-radius:50%;
+    background:var(--orange);box-shadow:0 0 10px 2px rgba(217,119,87,.7);opacity:0;}
+  .fwd .mpkt{left:0;}
+  .rev .mpkt{right:0;}
+  @keyframes travelF{0%{left:0;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{left:calc(100% - 12px);opacity:0;}}
+  @keyframes travelR{0%{right:0;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{right:calc(100% - 12px);opacity:0;}}
+  .mlab{font-size:19px;color:var(--muted);width:330px;flex:none;}
+  .mlab b{color:var(--orange);font-weight:500;}
+  #slide4.play .r1{animation:fadeIn .4s ease 1.2s forwards;}
+  #slide4.play .r1 .mfill{animation:drawX .5s ease 1.3s forwards;}
+  #slide4.play .r1 .mpkt{animation:travelF 1.0s linear 1.4s forwards;}
+  #slide4.play .r2{animation:fadeIn .4s ease 2.4s forwards;}
+  #slide4.play .r2 .mfill{animation:drawX .5s ease 2.5s forwards;}
+  #slide4.play .r2 .mpkt{animation:travelR 1.0s linear 2.6s forwards;}
+  #slide4.play .r3{animation:fadeIn .4s ease 3.8s forwards;}
+  #slide4.play .r3 .mfill{animation:drawX .5s ease 3.9s forwards;}
+  #slide4.play .r3 .mpkt{animation:travelF 1.0s linear 4.0s forwards;}
+  #slide4.play .r4{animation:fadeIn .4s ease 5.4s forwards;}
+  #slide4.play .r4 .mfill{animation:drawX .5s ease 5.5s forwards,streamGlow 1.6s ease-in-out 6.0s 2;}
+  #slide4.play .r4 .mpkt{animation:travelR 1.0s linear 5.6s forwards;}
+  #slide4.play .callout{animation:fadeUp .7s ease 6.8s forwards;}
+  #slide4.play .warn{animation:warnPulse 1s ease 7.0s 3;}
+
+  /* ========== SLIDE 5 循环（Loop Visual） ========== */
+  #slide5{gap:24px;padding:72px 100px;}
+  #slide5 h1{font-size:64px;}
+  #slide5 .callout{padding:14px 28px;gap:16px;}
+  #slide5 .callout p{font-size:26px;}
+  #slide5 .callout .warn{width:28px;height:28px;}
+  .loop-wrap{flex:1;display:flex;gap:160px;align-items:center;justify-content:center;min-height:0;}
+  .loop-ring{width:400px;height:400px;flex:none;border:2px dashed var(--card-line);
+    border-radius:50%;position:relative;opacity:0;}
+  #slide5.play .loop-ring{animation:fadeIn .6s ease .9s forwards;}
+  .orbit{position:absolute;inset:-2px;animation:spin 5s linear 2.2s infinite;}
+  @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+  .orbit .odot{position:absolute;top:-8px;left:50%;margin-left:-8px;width:16px;height:16px;
+    border-radius:50%;background:var(--orange);
+    box-shadow:0 0 14px 4px rgba(217,119,87,.7);}
+  .lnode{position:absolute;width:190px;background:var(--card);border:1.5px solid var(--card-line);
+    border-radius:14px;padding:12px 10px;text-align:center;opacity:0;}
+  .lnode .ln{font-size:22px;font-weight:700;color:var(--cream);}
+  .lnode .ls{font-size:17px;color:var(--muted);}
+  .lnode.hl-node{border-color:var(--orange);}
+  .ln-top{top:-38px;left:50%;margin-left:-95px;}
+  .ln-right{top:50%;right:-98px;margin-top:-38px;}
+  .ln-bottom{bottom:-38px;left:50%;margin-left:-95px;}
+  .ln-left{top:50%;left:-98px;margin-top:-38px;}
+  .ring-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:26px;font-weight:700;color:var(--orange);letter-spacing:2px;}
+  #slide5.play .ln1{animation:popIn .5s ease 1.1s forwards;}
+  #slide5.play .ln2{animation:popIn .5s ease 1.4s forwards;}
+  #slide5.play .ln3{animation:popIn .5s ease 1.7s forwards;}
+  #slide5.play .ln4{animation:popIn .5s ease 2.0s forwards;}
+
+  .seq-col{width:760px;flex:none;display:flex;flex-direction:column;justify-content:center;gap:14px;}
+  .seq-label{font-size:22px;color:var(--orange);letter-spacing:2px;opacity:0;}
+  #slide5.play .seq-label{animation:fadeIn .4s ease 2.4s forwards;}
+  .seq{display:flex;flex-direction:column;gap:10px;}
+  .sq{background:var(--card);border:1.5px solid var(--card-line);border-radius:10px;
+    padding:10px 20px;display:flex;align-items:center;gap:16px;opacity:0;}
+  .sq .cmd{font-size:22px;color:var(--cream);font-weight:500;}
+  .sq .res{font-size:19px;color:var(--muted);margin-left:auto;}
+  .sq.final{border-color:var(--orange);background:#2A1B12;}
+  .sq.final .cmd{color:var(--orange);font-weight:700;}
+  .sq .iter{font-size:16px;color:var(--muted);width:52px;flex:none;}
+  #slide5.play .q1{animation:chipOn .45s ease 2.6s forwards;}
+  #slide5.play .q2{animation:chipOn .45s ease 3.4s forwards;}
+  #slide5.play .q3{animation:chipOn .45s ease 4.2s forwards;}
+  #slide5.play .q4{animation:chipOn .45s ease 5.0s forwards;}
+  #slide5.play .q5{animation:chipOn .45s ease 5.8s forwards,glowFinal 1s ease 6.6s forwards;}
+  #slide5.play .callout{animation:fadeUp .7s ease 7.4s forwards;}
+  #slide5.play .warn{animation:warnPulse 1s ease 7.6s 3;}
+
+  /* ========== SLIDE 6 金句（Quote） ========== */
+  .roles{display:flex;gap:40px;align-items:stretch;opacity:1;}
+  .role{flex:1;background:var(--card);border:1.5px solid var(--card-line);border-radius:20px;
+    padding:28px 32px;display:flex;flex-direction:column;gap:12px;opacity:0;}
+  .role.model{border-color:var(--orange);}
+  #slide6.play .role.model{animation:fadeUp .5s ease 1.0s forwards;}
+  #slide6.play .role.harness{animation:fadeUp .5s ease 1.5s forwards;}
+  .role .rn{font-size:34px;font-weight:700;color:var(--cream);}
+  .role .rn b{color:var(--orange);}
+  .role .rd{font-size:24px;color:var(--muted);}
+  .role .re{font-size:22px;color:var(--cream);}
+  .quote-zone{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:36px;}
+  .big-quote{font-size:52px;font-weight:700;color:var(--cream);text-align:center;
+    line-height:1.6;max-width:1500px;opacity:0;}
+  .big-quote .q-o{color:var(--orange);}
+  #slide6.play .big-quote{animation:fadeUp .7s ease 2.4s forwards;}
+  .quote-mark{font-size:80px;color:var(--orange);opacity:0;line-height:1;}
+  #slide6.play .quote-mark{animation:popIn .6s ease 2.2s forwards;}
+  #slide6.play .footnote{animation:fadeIn .8s ease 3.4s forwards;}
+
+  /* ========== SLIDE 7 收尾（Closing） ========== */
+  .close-wrap{flex:1;display:flex;flex-direction:column;justify-content:center;gap:36px;min-height:0;}
+  .prog-label{display:flex;justify-content:space-between;font-size:22px;color:var(--muted);
+    letter-spacing:2px;opacity:0;}
+  #slide7.play .prog-label{animation:fadeIn .4s ease .9s forwards;}
+  .prog{height:90px;border-radius:16px;background:var(--bar-dark);border:1.5px solid var(--bar-line);
+    display:flex;overflow:hidden;opacity:0;position:relative;}
+  #slide7.play .prog{animation:fadeUp .5s ease 1.0s forwards;}
+  .prog-half{flex:1;display:flex;align-items:center;justify-content:center;gap:14px;
+    font-size:26px;font-weight:700;position:relative;}
+  .prog-half.done{background:rgba(217,119,87,.18);color:var(--cream);}
+  .prog-half.todo{color:var(--muted);}
+  .prog-half .ph-fill{position:absolute;inset:0;background:var(--orange);
+    transform:scaleX(0);transform-origin:left;}
+  .prog-half.todo .pt{position:relative;z-index:2;}
+  .prog-half.todo.done-now{color:#1B1410;}
+  #slide7.play .ph-fill{animation:drawX 1.4s ease-in-out 2.0s forwards;}
+  #slide7.play .todo .pt{animation:fadeOut .3s ease 3.3s forwards;}
+  .todo .pt2{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    gap:14px;color:#1B1410;font-size:26px;font-weight:700;opacity:0;z-index:2;}
+  #slide7.play .pt2{animation:fadeIn .3s ease 3.4s forwards;}
+  .close-list{display:flex;gap:24px;}
+  .cl{flex:1;background:var(--card);border:1.5px solid var(--card-line);border-radius:14px;
+    padding:18px 22px;display:flex;flex-direction:column;gap:6px;opacity:0;}
+  .cl .cn{font-size:24px;font-weight:700;color:var(--cream);}
+  .cl .cs{font-size:19px;color:var(--muted);}
+  .cl .ci{font-size:20px;color:var(--orange);font-weight:700;}
+  #slide7.play .c1{animation:fadeUp .45s ease 3.8s forwards;}
+  #slide7.play .c2{animation:fadeUp .45s ease 4.1s forwards;}
+  #slide7.play .c3{animation:fadeUp .45s ease 4.4s forwards;}
+  #slide7.play .c4{animation:fadeUp .45s ease 4.7s forwards;}
+  .go{display:flex;align-items:center;justify-content:center;gap:20px;opacity:0;}
+  .go .gt{font-size:56px;font-weight:700;color:var(--orange);}
+  .go .ga{font-size:56px;color:var(--orange);animation:nudge 1s ease-in-out 5.6s infinite;}
+  @keyframes nudge{0%,100%{transform:translateX(0);}50%{transform:translateX(16px);}}
+  #slide7.play .go{animation:fadeUp .7s ease 5.2s forwards;}
+  #slide7.play .footnote{animation:fadeIn .8s ease 6.2s forwards;}
+
+  /* ========== SLIDE 8 循环骨架(伪代码) ========== */
+  #slide8{gap:26px;padding:72px 100px;}
+  #slide8 h1{font-size:64px;}
+  #slide8 .callout{padding:14px 28px;gap:16px;}
+  #slide8 .callout p{font-size:26px;}
+  #slide8 .callout .warn{width:28px;height:28px;}
+  .skel{flex:1;display:flex;gap:64px;align-items:center;min-height:0;}
+  #slide8 .term{flex:1;min-width:0;opacity:0;}
+  #slide8.play .term{animation:fadeUp .6s ease .9s forwards;}
+  #slide8 .term-body{font-size:26px;line-height:1.9;padding:28px 34px;}
+  #slide8 .cline .num{color:var(--orange);font-weight:700;}
+  #slide8.play .k1{animation:fadeIn .3s ease 1.3s forwards;}
+  #slide8.play .k2{animation:fadeIn .3s ease 1.6s forwards;}
+  #slide8.play .k3{animation:fadeIn .3s ease 1.9s forwards;}
+  #slide8.play .k4{animation:fadeIn .3s ease 2.2s forwards;}
+  #slide8.play .k5{animation:fadeIn .3s ease 2.5s forwards;}
+  #slide8.play .k6{animation:fadeIn .3s ease 2.8s forwards;}
+  #slide8.play .k7{animation:fadeIn .3s ease 3.1s forwards;}
+  @keyframes kLoop{0%,100%{background:rgba(217,119,87,.16);}50%{background:rgba(217,119,87,.42);}}
+  #slide8.play .k8{animation:fadeIn .3s ease 3.4s forwards,kLoop 1.6s ease-in-out 4.4s infinite;}
+  .flow{width:860px;flex:none;display:flex;flex-direction:column;align-items:center;position:relative;}
+  .frow{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;}
+  .fbox{background:var(--card);border:1.5px solid var(--card-line);border-radius:14px;
+    padding:12px 18px;text-align:center;opacity:0;min-width:160px;}
+  .fbox .fn{font-size:24px;font-weight:700;color:var(--cream);}
+  .fbox .fs{font-size:17px;color:var(--muted);margin-top:3px;}
+  .fbox.hot,.fbox.model,.fbox.feed{border-color:var(--orange);background:#2A1B12;}
+  .fharr{font-size:26px;color:var(--orange);font-weight:700;opacity:0;flex:none;}
+  .fharr b{font-size:19px;vertical-align:2px;}
+  .fdown{display:flex;align-items:center;gap:16px;height:72px;opacity:0;}
+  .fdown .fstem{width:2px;align-self:stretch;background:var(--card-line);position:relative;}
+  .fdown .fstem::after{content:"▼";position:absolute;bottom:-10px;left:50%;
+    transform:translateX(-50%);color:var(--orange);font-size:17px;}
+  .flab{font-size:19px;color:var(--muted);line-height:1.5;}
+  .flab b{color:var(--orange);font-weight:700;}
+  .flab .mono{color:var(--cream);font-size:18px;}
+  .fback{margin-top:14px;width:100%;text-align:center;font-size:20px;color:var(--orange);
+    border:1.5px dashed var(--orange);border-radius:12px;padding:10px 16px;opacity:0;}
+  /* 回环通道:回喂给模型 → 模型(API) */
+  .fret-b{position:absolute;right:16px;top:335px;width:334px;height:2px;
+    background:var(--orange);transform:scaleX(0);transform-origin:left;}
+  .fret-v{position:absolute;right:16px;top:38px;width:2px;height:299px;
+    background:var(--orange);transform:scaleY(0);transform-origin:bottom;}
+  .fret-t{position:absolute;right:16px;top:37px;width:309px;height:2px;
+    background:var(--orange);transform:scaleX(0);transform-origin:right;}
+  .fret-head{position:absolute;right:316px;top:25px;color:var(--orange);
+    font-size:17px;opacity:0;}
+  .fret-lab{position:absolute;right:30px;top:68px;writing-mode:vertical-rl;
+    font-size:16px;letter-spacing:3px;color:var(--orange);opacity:0;}
+  #slide8.play .fb1{animation:popIn .5s ease 1.2s forwards;}
+  #slide8.play .fd1{animation:fadeIn .4s ease 1.6s forwards;}
+  #slide8.play .fb2{animation:popIn .5s ease 2.0s forwards;}
+  #slide8.play .fa2{animation:fadeIn .3s ease 2.3s forwards;}
+  #slide8.play .fb3{animation:popIn .5s ease 2.5s forwards;}
+  #slide8.play .fd2{animation:fadeIn .4s ease 2.9s forwards;}
+  #slide8.play .fb4{animation:popIn .5s ease 3.2s forwards;}
+  #slide8.play .fb5{animation:popIn .5s ease 3.5s forwards;}
+  #slide8.play .fa5{animation:fadeIn .3s ease 3.8s forwards;}
+  #slide8.play .fback{animation:chipOn .5s ease 4.1s forwards,kLoop 1.8s ease-in-out 5.0s infinite;}
+  #slide8.play .fret-b{animation:drawX .35s ease 4.3s forwards;}
+  #slide8.play .fret-v{animation:drawY .5s ease 4.6s forwards;}
+  #slide8.play .fret-t{animation:drawX .35s ease 5.05s forwards;}
+  #slide8.play .fret-head{animation:fadeIn .2s ease 5.35s forwards;}
+  #slide8.play .fret-lab{animation:fadeIn .4s ease 5.5s forwards;}
+  #slide8.play .callout{animation:fadeUp .7s ease 5.6s forwards;}
+  #slide8.play .warn{animation:warnPulse 1s ease 5.8s 3;}
+
+  /* ========== SLIDE 9 总结（Summary） ========== */
+  #slide9{gap:26px;padding:72px 100px;}
+  #slide9 h1{font-size:64px;}
+  #slide9 .callout{padding:16px 32px;gap:18px;}
+  #slide9 .callout p{font-size:30px;font-weight:700;}
+  #slide9 .callout .warn{width:30px;height:30px;}
+  #slide9 .callout .loopmark{color:var(--orange);}
+
+  .sum-wrap{flex:1;display:flex;gap:72px;align-items:center;min-height:0;}
+
+  .sum-quote{flex:1.15;min-width:0;background:var(--card);border:1.5px solid var(--orange);
+    border-radius:22px;padding:44px 48px;display:flex;flex-direction:column;gap:26px;
+    box-shadow:0 0 60px rgba(217,119,87,.14);opacity:0;position:relative;}
+  .sum-quote .qm{position:absolute;top:-34px;left:34px;font-size:96px;line-height:1;
+    color:var(--orange);font-family:Georgia,serif;}
+  #slide9.play .sum-quote{animation:fadeUp .7s ease 1.0s forwards;}
+  .sum-quote .sq-main{font-size:42px;font-weight:700;color:var(--cream);line-height:1.7;}
+  .sum-quote .sq-main .q-o{color:var(--orange);}
+  .sum-quote .sq-main .q-m{color:var(--cream);background:rgba(217,119,87,.18);
+    border:1.5px solid rgba(217,119,87,.5);border-radius:10px;padding:2px 14px;
+    font-family:'JetBrains Mono',monospace;font-size:36px;white-space:nowrap;}
+  .sum-quote .sq-sub{font-size:24px;color:var(--muted);line-height:1.6;}
+
+  .sum-road{width:560px;flex:none;display:flex;flex-direction:column;gap:16px;}
+  .sum-road .sr-label{font-size:20px;letter-spacing:3px;color:var(--muted);opacity:0;}
+  #slide9.play .sr-label{animation:fadeIn .5s ease 1.9s forwards;}
+  .sr{display:flex;align-items:center;gap:18px;background:var(--card);
+    border:1.5px solid var(--card-line);border-radius:14px;padding:18px 24px;opacity:0;}
+  .sr .sr-idx{font-size:18px;color:var(--orange);font-weight:700;width:44px;flex:none;}
+  .sr .sr-col{display:flex;flex-direction:column;gap:4px;min-width:0;}
+  .sr .sr-t{font-size:25px;font-weight:700;color:var(--cream);}
+  .sr .sr-d{font-size:19px;color:var(--muted);}
+  .sr .sr-tag{margin-left:auto;flex:none;font-size:16px;color:var(--muted);
+    border:1px solid var(--card-line);border-radius:999px;padding:4px 14px;}
+  #slide9.play .sr1{animation:chipOn .5s ease 2.2s forwards;}
+  #slide9.play .sr2{animation:chipOn .5s ease 2.7s forwards;}
+  #slide9.play .sr3{animation:chipOn .5s ease 3.2s forwards;}
+  #slide9.play .sr4{animation:chipOn .5s ease 3.7s forwards;}
+  #slide9.play .callout{animation:fadeUp .7s ease 4.6s forwards;}
+  #slide9.play .warn{animation:warnPulse 1s ease 4.8s 3;}
+  #slide9.play .footnote{animation:fadeIn .8s ease 5.4s forwards;}
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+  <!-- ========== SLIDE 0 封面 ========== -->
+  <section class="slide active" id="slide0">
+    <div class="header anim d0">
+      <div class="tag mono">MINI CLAUDE CODE · 手搓系列</div>
+      <div class="indicator mono">01 / 09</div>
+    </div>
+    <div class="eyebrow anim d1">单轮对话 ✓ 流式输出 ✓ 接下来 ——</div>
+    <h1 class="anim d2">实现 Claude Code 的<br>Agent Loop</h1>
+
+    <div class="hero">
+      <div class="build">
+        <div class="build-label mono">WHAT YOU'LL BUILD</div>
+        <div class="bitem bi1"><div class="bbox">✓</div><div class="t">给模型配「工具说明书」</div></div>
+        <div class="bitem bi2"><div class="bbox">✓</div><div class="t">解析并执行 tool_use</div></div>
+        <div class="bitem bi3"><div class="bbox">✓</div><div class="t">用 while 串起 Agent Loop</div></div>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
+          <div class="term-file mono">agent.ts —— 本节要实现的循环</div>
+        </div>
+        <div class="term-body mono">
+          <span class="cline t1"><span class="kw">while</span> (<span class="kw">true</span>) {</span>
+          <span class="cline t2">  <span class="kw">const</span> msg = <span class="kw">await</span> claude(messages, { tools });</span>
+          <span class="cline t3">&nbsp;</span>
+          <span class="cline t4 hl">  <span class="kw">if</span> (msg.stop_reason !== <span class="st">"tool_use"</span>) <span class="kw">break</span>; <span class="cm">// 输出纯文本 → 收工</span></span>
+          <span class="cline t5">&nbsp;</span>
+          <span class="cline t6 hl">  <span class="kw">const</span> result = runTool(msg.tool_use); <span class="cm">// 我们替它执行</span></span>
+          <span class="cline t7">  messages.push(toolResult(result)); <span class="cm">// 回喂,进入下一轮</span></span>
+          <span class="cline t7">}</span>
+        </div>
+        <div class="term-out mono">
+          <span class="oline o1"><span class="pr">&gt; tool_use: </span>ls <span class="pr">→ ""</span><span class="pr">（空目录）</span></span>
+          <span class="oline o2"><span class="pr">&gt; tool_use: </span>mkdir demo <span class="pr">→ ok</span></span>
+          <span class="oline o3"><span class="pr">&gt; 模型: </span>搞定,目录已创建 ✓<span class="cursor">▍</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="trio">
+      <div class="pcard done pc1"><div class="pn mono">单轮对话</div><div class="pd">✓ 已完成 · 一问一答</div></div>
+      <div class="pcard done pc2"><div class="pn mono">流式输出</div><div class="pd">✓ 已完成 · SSE 逐字返回</div></div>
+      <div class="pcard here pc3"><div class="badge">🎯 本节主角</div><div class="pn mono">Agent Loop</div><div class="pd">工具调用 · 无限循环</div></div>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 2 为什么需要 Agent Loop ========== -->
+  <section class="slide" id="slide2">
+    <div class="header anim d0">
+      <div class="tag mono">WHY AGENT LOOP</div>
+      <div class="indicator mono">02 / 09</div>
+    </div>
+    <h1 class="anim d1">为什么需要 Agent Loop?</h1>
+
+    <div class="stmt">
+      <div class="big-stmt">
+        大模型本质上就是一台<br>
+        「输入 <span class="hl-o mono">token</span>、输出 <span class="hl-o mono">token</span>」的<span class="hl-o">概率机器</span>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
+          <div class="term-file mono">假如让模型自己动手 ——</div>
+        </div>
+        <div class="term-body mono">
+          <span class="cline q1"><span class="cm">$ </span>模型,帮我执行一下 ls</span>
+          <span class="cline q2">&nbsp;</span>
+          <span class="cline q3"><span class="kw">model:</span> 我只是个概率机器,</span>
+          <span class="cline q4"><span class="kw">model:</span> 连一条 shell 命令都跑不了<span class="cursor">▍</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4L29 27H3L16 4Z" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M16 13V19" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M16 23V24" stroke="#D97757" stroke-width="3"/>
+      </svg>
+      <p>那 Claude Code 里的 ls、读文件、跑测试 —— 到底是怎么完成的?</p>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 3 Function Calling 工具说明书 ========== -->
+  <section class="slide" id="slide3">
+    <div class="header anim d0">
+      <div class="tag mono">FUNCTION CALLING · TOOL SPEC</div>
+      <div class="indicator mono">03 / 09</div>
+    </div>
+    <h1 class="anim d1">关键机制:Function Calling</h1>
+    <p class="subtitle anim d2">调 API 时,先把「有哪些工具可用」提前告诉模型 —— 每个工具一份说明书</p>
+
+    <div class="fc">
+      <div class="fc-left">
+        <div class="fc-label mono">说明书三要素</div>
+        <div class="spec sp1"><div class="sn mono">name</div><div class="ba-col"><div class="sd">名字</div><div class="ss">模型靠它点名要调哪个工具</div></div></div>
+        <div class="spec sp2"><div class="sn mono">description</div><div class="ba-col"><div class="sd">作用</div><div class="ss">模型靠它判断「这个任务用不用得上」</div></div></div>
+        <div class="spec sp3"><div class="sn mono">parameters</div><div class="ba-col"><div class="sd">参数</div><div class="ss">模型靠它知道「要传什么、传什么类型」</div></div></div>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
+          <div class="term-file mono">tools.json —— bash 工具说明书</div>
+        </div>
+        <div class="term-body mono">
+          <span class="cline j1">{</span>
+          <span class="cline j2 hl">  <span class="st">"name"</span>: <span class="st">"bash"</span>,</span>
+          <span class="cline j3 hl">  <span class="st">"description"</span>: <span class="st">"执行 shell 命令"</span>,</span>
+          <span class="cline j4 hl">  <span class="st">"parameters"</span>: {</span>
+          <span class="cline j5">    <span class="st">"command"</span>: { <span class="st">"type"</span>: <span class="st">"string"</span> }</span>
+          <span class="cline j6">  }</span>
+          <span class="cline j7">}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>模型看完说明书,才知道「有这么个工具、该怎么调」—— 说明书质量直接决定工具调用质量</p>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 4 四步流程 ========== -->
+  <section class="slide" id="slide4">
+    <div class="header anim d0">
+      <div class="tag mono">FUNCTION CALLING · ONE ROUND</div>
+      <div class="indicator mono">04 / 09</div>
+    </div>
+    <h1 class="anim d1">Function Calling 的流程</h1>
+    <p class="subtitle anim d2">模型不直接输出最终答案,而是先输出一个「调用请求」</p>
+
+    <div class="layout4">
+      <div class="step-col">
+        <div class="rail"><div class="rail-fill"></div></div>
+        <div class="col-label mono fc4label">FOUR STEPS</div>
+        <div class="chip s1"><div class="idx mono">1</div><div><div class="nm">告诉模型有哪些工具</div><div class="ds">每个工具一份说明书:name / description / parameters</div></div></div>
+        <div class="chip s2"><div class="idx mono">2</div><div><div class="nm">模型输出 tool_use</div><div class="ds">「我要调 bash,参数是 ls」—— 而不是直接给答案</div></div></div>
+        <div class="chip s3"><div class="idx mono">3</div><div><div class="nm">客户端真正执行</div><div class="ds">我们替它跑 ls,把结果包成 tool_result 回喂</div></div></div>
+        <div class="chip s4"><div class="idx mono">4</div><div><div class="nm">模型继续作答</div><div class="ds">看到结果后组织语言 —— 或发起下一次调用</div></div></div>
+      </div>
+
+      <div class="msg-col">
+        <div class="msg-panel">
+          <div class="msg-head mono"><span>MESSAGE FLOW 解剖</span><span class="mono">HARNESS ⇄ MODEL</span></div>
+          <div class="mrow r1 fwd">
+            <div class="mnode me">客户端</div>
+            <div class="mtrack"><div class="mfill"></div><div class="mpkt"></div></div>
+            <div class="mnode">模型</div>
+            <div class="mlab"><b>①</b> tools 说明书 + 用户问题</div>
+          </div>
+          <div class="mrow r2 rev">
+            <div class="mnode me">客户端</div>
+            <div class="mtrack"><div class="mfill"></div><div class="mpkt"></div></div>
+            <div class="mnode">模型</div>
+            <div class="mlab"><b>②</b> tool_use: bash("ls")</div>
+          </div>
+          <div class="mrow r3 fwd">
+            <div class="mnode me">客户端</div>
+            <div class="mtrack"><div class="mfill"></div><div class="mpkt"></div></div>
+            <div class="mnode">模型</div>
+            <div class="mlab"><b>③</b> tool_result: ls 的输出</div>
+          </div>
+          <div class="mrow r4 rev">
+            <div class="mnode me">客户端</div>
+            <div class="mtrack"><div class="mfill"></div><div class="mpkt"></div></div>
+            <div class="mnode">模型</div>
+            <div class="mlab"><b>④</b> 纯文本回答,或再次 tool_use</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>关键在第 ② 步:模型输出的不是答案,而是一个「调用请求」—— 执行权在客户端手里</p>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 5 循环体现在哪 ========== -->
+  <section class="slide" id="slide5">
+    <div class="header anim d0">
+      <div class="tag mono">AGENT LOOP · THE LOOP</div>
+      <div class="indicator mono">05 / 09</div>
+    </div>
+    <h1 class="anim d1">「循环」体现在哪?</h1>
+    <p class="subtitle anim d2">第 ③ 步结束后,又回到第 ① 步 —— 直到模型输出纯文本为止</p>
+
+    <div class="loop-wrap">
+      <div class="loop-ring">
+        <div class="orbit"><div class="odot"></div></div>
+        <div class="ring-center mono">AGENT<br>LOOP</div>
+        <div class="lnode ln-top ln1"><div class="ln">模型决策</div><div class="ls">调哪个工具?</div></div>
+        <div class="lnode ln-right ln2"><div class="ln mono">tool_use</div><div class="ls">发起调用</div></div>
+        <div class="lnode ln-bottom ln3"><div class="ln">Harness 执行</div><div class="ls">真正跑命令</div></div>
+        <div class="lnode ln-left ln4"><div class="ln mono">tool_result</div><div class="ls">回喂结果</div></div>
+      </div>
+
+      <div class="seq-col">
+        <div class="seq-label mono">一个真实的循环序列</div>
+        <div class="seq">
+          <div class="sq q1"><div class="iter mono">#1</div><div class="cmd mono">$ ls</div><div class="res">→ ""(空目录)</div></div>
+          <div class="sq q2"><div class="iter mono">#2</div><div class="cmd mono">$ mkdir demo</div><div class="res">→ ok</div></div>
+          <div class="sq q3"><div class="iter mono">#3</div><div class="cmd mono">$ touch demo/a.txt</div><div class="res">→ ok</div></div>
+          <div class="sq q4"><div class="iter mono">#…</div><div class="cmd mono">…… 继续判断、继续调</div><div class="res">直到模型觉得「够了」</div></div>
+          <div class="sq q5 final"><div class="iter mono">✓</div><div class="cmd mono">输出纯文本,循环收尾</div><div class="res">stop_reason: end_turn</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>模型不是只能调一次工具 —— 调完 ls 发现空目录,再调 mkdir,再调 touch…… 直到「够了」</p>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 6 一句话本质 ========== -->
+  <section class="slide" id="slide6">
+    <div class="header anim d0">
+      <div class="tag mono">AGENT LOOP · THE ESSENCE</div>
+      <div class="indicator mono">06 / 09</div>
+    </div>
+    <h1 class="anim d1">Agent Loop 的本质,一句话说清</h1>
+
+    <div class="roles" style="margin-top:8px;">
+      <div class="role model">
+        <div class="rn">模型 → 负责<b>「决策」</b></div>
+        <div class="rd">要调哪个工具、传什么参数</div>
+        <div class="re mono">tool_use: bash("mkdir demo")</div>
+      </div>
+      <div class="role harness">
+        <div class="rn">客户端(Harness) → 负责<b>「执行」</b></div>
+        <div class="rd">真正跑命令、读文件、回喂结果</div>
+        <div class="re mono">tool_result: "ok"</div>
+      </div>
+    </div>
+
+    <div class="quote-zone">
+      <div class="quote-mark">“</div>
+      <div class="big-quote">
+        模型负责<span class="q-o">「决策」</span>,客户端负责<span class="q-o">「执行」</span>,<br>
+        然后<span class="q-o">无限循环</span> —— 直到模型输出纯文本为止。
+      </div>
+    </div>
+
+    <p class="footnote mono anim">// decision by model, execution by harness, loop until plain text</p>
+  </section>
+
+  <!-- ========== SLIDE 7 收尾 ========== -->
+  <section class="slide" id="slide7">
+    <div class="header anim d0">
+      <div class="tag mono">LET'S BUILD · HANDS ON</div>
+      <div class="indicator mono">07 / 09</div>
+    </div>
+    <h1 class="anim d1">这一节,把另一半补齐</h1>
+    <p class="subtitle anim d2">前面只实现了「纯文本」这一半;现在,把「工具 + 循环」另一半装上</p>
+
+    <div class="close-wrap">
+      <div class="prog-label mono"><span>MINI CLAUDE CODE · 完成度</span><span>50% → 100%</span></div>
+      <div class="prog">
+        <div class="prog-half done">✓ 单轮对话 + 流式输出</div>
+        <div class="prog-half todo">
+          <div class="ph-fill"></div>
+          <div class="pt">工具 + 循环(待补齐)</div>
+          <div class="pt2">✓ 工具 + 循环(本节搞定)</div>
+        </div>
+      </div>
+
+      <div class="close-list">
+        <div class="cl c1"><div class="ci mono">STEP 1</div><div class="cn">配工具说明书</div><div class="cs">tools 数组告诉模型有啥可用</div></div>
+        <div class="cl c2"><div class="ci mono">STEP 2</div><div class="cn">解析 tool_use</div><div class="cs">识别模型的调用请求</div></div>
+        <div class="cl c3"><div class="ci mono">STEP 3</div><div class="cn">执行并回喂</div><div class="cs">跑命令,包成 tool_result</div></div>
+        <div class="cl c4"><div class="ci mono">STEP 4</div><div class="cn">while 串起来</div><div class="cs">直到 stop_reason 不再是 tool_use</div></div>
+      </div>
+
+      <div class="go"><div class="gt">下面开始动手</div><div class="ga">→</div></div>
+    </div>
+
+    <p class="footnote mono anim">// talk is cheap, show me the code</p>
+  </section>
+
+  <!-- ========== SLIDE 8 循环骨架 ========== -->
+  <section class="slide" id="slide8">
+    <div class="header anim d0">
+      <div class="tag mono">AGENT LOOP · SKELETON</div>
+      <div class="indicator mono">08 / 09</div>
+    </div>
+    <h1 class="anim d1">先把循环的骨架立起来</h1>
+    <p class="subtitle anim d2">左边伪代码骨架,右边数据流 —— 一个 while 撑起全部</p>
+
+    <div class="skel">
+      <div class="term">
+        <div class="term-bar">
+          <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
+          <div class="term-file mono">loop.pseudo —— 循环骨架</div>
+        </div>
+        <div class="term-body mono">
+          <span class="cline k1"><span class="kw">while</span> 模型请求调用工具:</span>
+          <span class="cline k2">  <span class="num">1.</span> 调 API,流式拿回复</span>
+          <span class="cline k3">  <span class="num">2.</span> 把模型的 assistant 消息存起来</span>
+          <span class="cline k4">  <span class="num">3.</span> 有没有 <span class="st">tool_use</span> 块?</span>
+          <span class="cline k5 hl">     没有 <span class="kw">-&gt;</span> 结束循环 <span class="cm"># 模型给出了最终文本</span></span>
+          <span class="cline k6 hl">     有  <span class="kw">-&gt;</span> 逐个执行工具 <span class="cm"># 拿到 tool_result</span></span>
+          <span class="cline k7">  <span class="num">4.</span> 把 tool_result 回喂给模型 <span class="cm">(role: user)</span></span>
+          <span class="cline k8 hl">  <span class="num">5.</span> 回到第 1 步 <span class="kw">↩</span></span>
+        </div>
+      </div>
+
+      <div class="flow">
+        <div class="frow">
+          <div class="fbox fb1 model"><div class="fn">模型 (API)</div><div class="fs">决策:要不要调工具</div></div>
+        </div>
+        <div class="fdown fd1">
+          <div class="fstem"></div>
+          <div class="flab"><b>①</b> 输出 tool_use 块<br><span class="mono">"调 bash, command = ls"</span></div>
+        </div>
+        <div class="frow">
+          <div class="fbox fb5"><div class="fn mono">messages</div><div class="fs">累积对话</div></div>
+          <div class="fharr fa5">→</div>
+          <div class="fbox fb2 hot"><div class="fn">query 循环</div><div class="fs mono">(harness)</div></div>
+          <div class="fharr fa2"><b>②</b>→</div>
+          <div class="fbox fb3"><div class="fn mono">Tool (bash)</div><div class="fs">真正执行</div></div>
+        </div>
+        <div class="fdown fd2">
+          <div class="fstem"></div>
+          <div class="flab"><b>③</b> 拿到结果 <span class="mono">tool_result</span></div>
+        </div>
+        <div class="frow">
+          <div class="fbox fb4 feed"><div class="fn">回喂给模型</div><div class="fs mono">(role: user)</div></div>
+        </div>
+        <div class="fback mono">↩ tool_result 累积进 messages —— 开启下一轮循环</div>
+
+        <div class="fret-b"></div>
+        <div class="fret-v"></div>
+        <div class="fret-t"></div>
+        <div class="fret-head">◀</div>
+        <div class="fret-lab mono">④ 回到模型 · 新一轮循环</div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>Agent Loop 没有魔法 —— 整个循环,就是一个 while + 五行骨架</p>
+    </div>
+  </section>
+
+  <!-- ========== SLIDE 9 总结 ========== -->
+  <section class="slide" id="slide9">
+    <div class="header anim d0">
+      <div class="tag mono">SUMMARY · 总结</div>
+      <div class="indicator mono">09 / 09</div>
+    </div>
+    <h1 class="anim d1">总结:核心永远是这一个循环</h1>
+    <p class="subtitle anim d2">所谓 Agent Loop,本质就是一句话</p>
+
+    <div class="sum-wrap">
+      <div class="sum-quote">
+        <div class="qm">“</div>
+        <div class="sq-main">
+          模型出<span class="q-o">「决策」</span>,harness 出<span class="q-o">「执行」</span>,<br>
+          两者靠 <span class="q-m">messages</span> 数组这个<span class="q-o">「对话记忆」</span>来回接力,<br>
+          直到模型吐出纯文本为止。
+        </div>
+        <div class="sq-sub">决策与执行分离,记忆在 messages 里累积 —— 这就是全部。</div>
+      </div>
+
+      <div class="sum-road">
+        <div class="sr-label mono">后续可以继续加 …</div>
+        <div class="sr sr1"><div class="sr-idx mono">+1</div><div class="sr-col"><div class="sr-t">真实子进程</div><div class="sr-d">把假 Bash 换成真的 subprocess</div></div><div class="sr-tag mono">exec</div></div>
+        <div class="sr sr2"><div class="sr-idx mono">+2</div><div class="sr-col"><div class="sr-t">文件读写工具</div><div class="sr-d">read / write / edit 三件套</div></div><div class="sr-tag mono">fs</div></div>
+        <div class="sr sr3"><div class="sr-idx mono">+3</div><div class="sr-col"><div class="sr-t">工具权限校验</div><div class="sr-d">危险操作,先问人再执行</div></div><div class="sr-tag mono">auth</div></div>
+        <div class="sr sr4"><div class="sr-idx mono">+4</div><div class="sr-col"><div class="sr-t">MCP 协议</div><div class="sr-d">工具标准化,即插即用</div></div><div class="sr-tag mono">mcp</div></div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <svg class="warn" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" stroke="#D97757" stroke-width="2.5"/>
+        <path d="M10 16.5L14 20.5L22 12" stroke="#D97757" stroke-width="2.5"/>
+      </svg>
+      <p>无论怎么加 —— 核心,永远是<span class="loopmark">这一个循环</span> ↩</p>
+    </div>
+
+    <p class="footnote mono anim">// one loop to rule them all</p>
+  </section>
+
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  const slides = ['slide0','slide2','slide3','slide4','slide5','slide6','slide7','slide8','slide9']
+    .map(id=>document.getElementById(id));
+  let cur = 0;
+
+  function fit(){
+    const s = Math.min(innerWidth/1920, innerHeight/1080);
+    stage.style.transform = `scale(${s})`;
+  }
+  addEventListener('resize', fit); fit();
+
+  function play(i){
+    slides.forEach((sl,idx)=>sl.classList.toggle('active', idx===i));
+    cur = i;
+    restart();
+  }
+
+  function restart(){
+    const sl = slides[cur];
+    sl.classList.remove('play');
+    void sl.offsetWidth;               // 强制回流,重置动画
+    sl.classList.add('play');
+  }
+
+  const next = ()=>play((cur+1)%slides.length);   // 点击任意处 → 下一页
+  stage.addEventListener('click', next);
+  addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter') next();
+    if(e.key==='ArrowLeft') play((cur-1+slides.length)%slides.length);
+    if(e.key==='r'||e.key==='R') restart();
+  });
+
+  play(0);
+</script>
+</body>
+</html>
