@@ -3,6 +3,9 @@ import { bashTool } from './tools/BashTool/BashTool.js';
 import { fileReadTool } from './tools/FileReadTool/FileReadTool.js';
 import { fileEditTool } from './tools/FileEditTool/FileEditTool.js';
 import { fileWriteTool } from './tools/FileWriteTool/FileWriteTool.js';
+import { globTool } from './tools/GlobTool/GlobTool.js';
+import { grepTool } from './tools/GrepTool/GrepTool.js';
+
 
 /**
  * 工具注册表（对应真实源码 `src/tools.ts` 的工具分发）。
@@ -16,4 +19,6 @@ export const TOOLS: Tool[] = [
   fileReadTool,
   fileEditTool,
   fileWriteTool,
+  globTool,
+  grepTool,
 ];
